@@ -32,7 +32,7 @@ struct SettingsView: View {
                     }
                 }
             } header: { Text("Network") } footer: {
-                Text("Direct Wi‑Fi link connects straight to nearby iPhones, iPads and Macs (like AirDrop) without leaving your network. Automatic uses it only when the normal network can't reach the device. Bluetooth is used to find devices.")
+                Text("Direct Wi‑Fi link connects straight to nearby iPhones, iPads and Macs (like AirDrop) without leaving your network. Automatic uses it whenever the other device is in range (it's usually faster than going through your router). Bluetooth is used to find devices.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Favorites") {

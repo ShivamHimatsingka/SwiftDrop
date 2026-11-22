@@ -39,6 +39,9 @@ enum P2P {
 
 /// Browses for SwiftDrop services on Wi‑Fi *and* peer-to-peer links.
 final class P2PBrowser: @unchecked Sendable {
+    /// Peer-to-peer interface (awdl0) each service was seen on, for pinning direct connections.
+    static let interfaces = InterfaceMap()
+
     struct Found: Sendable {
         let serviceName: String
         let fingerprint: String
@@ -60,7 +63,9 @@ final class P2PBrowser: @unchecked Sendable {
             let found: [Found] = results.compactMap { r in
                 guard case .service(let name, _, _, _) = r.endpoint,
                       case .bonjour(let txt) = r.metadata, let fp = txt["f"] else { return nil }
-                let p2p = r.interfaces.contains { $0.name.hasPrefix("awdl") || $0.name.hasPrefix("llw") }
+                let awdl = r.interfaces.first { $0.name.hasPrefix("awdl") }
+                P2PBrowser.interfaces.set(name, awdl)
+                let p2p = awdl != nil
                 return Found(serviceName: name, fingerprint: fp, alias: txt["a"] ?? name, model: txt["m"],
                              type: txt["t"], scheme: txt["s"] ?? "https", isPeerToPeer: p2p)
             }
@@ -83,16 +88,17 @@ enum P2PHTTP {
 
     static func request(service: String, tls: Bool, method: String, path: String, query: [String: String] = [:],
                         body: Body = .none, contentType: String = "application/json", timeout: TimeInterval = 30,
-                        progress: ((Int64) -> Void)? = nil) async throws -> (Int, Data) {
-        if let hit = cache.get(service) {
+                        peerToPeerOnly: Bool = false, progress: ((Int64) -> Void)? = nil) async throws -> (Int, Data) {
+        let awdl = peerToPeerOnly ? P2PBrowser.interfaces.get(service) : nil
+        if let hit = cache.get(service), awdl == nil || hit.interface?.name == awdl?.name {
             do {
                 return try await perform(endpoint: hit.endpoint, interface: hit.interface, service: service, tls: tls, method: method,
                                          path: path, query: query, body: body, contentType: contentType, timeout: timeout, progress: progress)
             } catch is CancellationError { throw TransferError.cancelled }
             catch { cache.remove(service) }   // address went stale (e.g. AWDL re-negotiated): resolve again
         }
-        return try await perform(endpoint: .service(name: service, type: P2P.serviceType, domain: "local.", interface: nil),
-                                 interface: nil, service: service, tls: tls, method: method, path: path, query: query,
+        return try await perform(endpoint: .service(name: service, type: P2P.serviceType, domain: "local.", interface: awdl),
+                                 interface: awdl, service: service, tls: tls, method: method, path: path, query: query,
                                  body: body, contentType: contentType, timeout: timeout, progress: progress)
     }
 
@@ -111,7 +117,9 @@ enum P2PHTTP {
                 switch state {
                 case .ready:
                     if case .service = endpoint, let path = conn.currentPath, let remote = path.remoteEndpoint {
-                        cache.set(service, remote, path.availableInterfaces.first)
+                        let iface = path.availableInterfaces.first
+                        cache.set(service, remote, iface)
+                        SDLog.log("direct link to \(service) via \(iface?.name ?? "?")")
                     }
                     once.run { c.resume() }
                 case .failed(let e): once.run { c.resume(throwing: e) }
@@ -192,6 +200,12 @@ enum P2PHTTP {
         }
         return (status, body)
     }
+}
+
+final class InterfaceMap: @unchecked Sendable {
+    private let lock = NSLock(); private var map: [String: NWInterface] = [:]
+    func set(_ k: String, _ v: NWInterface?) { lock.withLock { map[k] = v } }
+    func get(_ k: String) -> NWInterface? { lock.withLock { map[k] } }
 }
 
 private final class ResolvedCache: @unchecked Sendable {

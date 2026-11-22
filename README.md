@@ -13,7 +13,7 @@ so it also works with every device that already runs LocalSend (Linux included).
 | Receive with nothing open | ✅ menu bar app, starts at login | ⚠️ app must be open (iOS restriction) | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
 | Accept prompt | Notification-style banner | AirDrop-style card | Heads-up notification + card | Toast above the tray |
 | Visibility | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone |
-| Size | 2.3 MB | 2.5 MB | 2 MB APK | 350 KB exe |
+| Size | 2.4 MB | 2.5 MB | 2 MB APK | 25 MB exe (incl. Windows Bluetooth bindings) |
 
 Everything streams straight to disk, so files of any size and any format work. Folders keep their structure.
 Transfers are encrypted (HTTPS with per-device self-signed certificates, like LocalSend).
@@ -51,10 +51,15 @@ Download from the [latest release](../../releases/latest).
 
 ### iPhone / iPad (iOS 17+)
 Apple doesn't allow installing apps outside the App Store or Xcode, so build it yourself (free Apple ID is enough):
-1. Open `iOS/SwiftDrop.xcodeproj` in Xcode 16+.
-2. For both targets (*SwiftDrop* and *SwiftDropShare*): Signing & Capabilities ▸ choose your Team
-   (change the bundle IDs if Xcode asks).
-3. Plug in your iPhone, select it, and press **Run**. Allow **Local Network** on first launch.
+1. In Xcode ▸ Settings ▸ Accounts, sign in with your Apple ID. On the iPhone, turn on
+   Settings ▸ Privacy & Security ▸ **Developer Mode** (it restarts; no data is erased).
+2. Open `iOS/SwiftDrop.xcodeproj`. In **Build Settings** of the project, set `SWIFTDROP_BUNDLE_PREFIX` to something
+   unique to you (e.g. `com.yourname`). Then pick your **Team** under Signing & Capabilities for both targets.
+   Or build from Terminal:
+   `xcodebuild -project iOS/SwiftDrop.xcodeproj -scheme SwiftDrop -destination 'id=<iPhone UDID>' -allowProvisioningUpdates DEVELOPMENT_TEAM=<team> SWIFTDROP_BUNDLE_PREFIX=com.yourname build`
+3. Plug in your iPhone, select it, and press **Run**. The first time, trust yourself in Settings ▸ General ▸
+   VPN & Device Management. Allow **Local Network** and **Bluetooth**.
+   With a free Apple ID the app must be re-run from Xcode every 7 days.
 4. Send: **Share ▸ SwiftDrop** from Photos, Files, Safari… Receive: keep SwiftDrop open.
    Photos and videos you receive go to your Photos library; everything else goes to **Files ▸ On My iPhone ▸ SwiftDrop**.
 
@@ -80,10 +85,18 @@ When two devices aren't on the same network, SwiftDrop can make its own Wi‑Fi 
 | Android ↔ Android | Wi‑Fi Direct (set up over Bluetooth) | Receiver only opens a group for senders it would accept |
 | Windows ↔ anything, Android ↔ Apple | Bluetooth discovery only | These need a shared network: Apple doesn't support Wi‑Fi Direct, and Windows needs pairing dialogs |
 
-**Settings ▸ Direct Wi‑Fi link** (Mac and iPhone): *Automatic* (default) uses the direct link only when the
-normal network can't reach the device. *Always* prefers it, and *Off* disables it.
-On the same good Wi‑Fi network a direct link usually isn't faster. It helps when there's no shared network,
-the router is slow or busy, or the network blocks device-to-device traffic.
+**Settings ▸ Direct Wi‑Fi link** (Mac and iPhone): *Automatic* (default) uses the direct link whenever the other
+Apple device is in range, like AirDrop, and the normal network otherwise. *Always* insists on it, and *Off* disables it.
+
+Measured between a MacBook Air and an iPhone SE on the same home Wi‑Fi (300 MB file):
+
+| Route | Mac → iPhone |
+|---|---|
+| Direct link (peer-to-peer Wi‑Fi) | **7–8 s (~40 MB/s)** |
+| Through the Wi‑Fi router | 22–27 s (~12 MB/s) |
+
+How much faster the direct link is depends on your router. The direct link also works with no shared network at all.
+Connection events are logged to `~/Library/Logs/SwiftDrop/SwiftDrop.log` on the Mac.
 
 ## Platform notes (honest limits)
 
@@ -126,6 +139,11 @@ docs/           NativeReceiving.md — the plan for receiving with nothing insta
 ```
 
 ## Tested
+**Mac ↔ real iPhone (iPhone SE, iOS):** Bluetooth discovery (the Mac read the iPhone's card within 2.5 s), and 300 MB
+transfers in both directions over the direct link and over normal Wi‑Fi. Every file was byte-identical, and
+interface byte counters confirmed which link carried each transfer. Android Wi‑Fi Direct and Windows Bluetooth are
+built but untested on hardware.
+
 Every direction was tested between the Mac app, an iOS 27 simulator, an Android 15 emulator, and the Windows
 engine (via the CLI). Each test sent a folder with subfolders, a 50 MB binary, a photo and a text message, and
 every file arrived byte-for-byte identical (12/12 directions). The accept/decline prompts, auto-accept favourites,

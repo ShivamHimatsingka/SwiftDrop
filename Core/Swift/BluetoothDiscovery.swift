@@ -66,6 +66,7 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
 
     func peripheralManagerDidUpdateState(_ p: CBPeripheralManager) {
         guard p.state == .poweredOn else { return }
+        SDLog.log("Bluetooth advertising ready")
         if !serviceAdded {
             let ch = CBMutableCharacteristic(type: SwiftDropBLE.info, properties: [.read], value: nil, permissions: [.readable])
             let svc = CBMutableService(type: SwiftDropBLE.service, primary: true)
@@ -100,6 +101,7 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
     // MARK: Scanning (central)
 
     func centralManagerDidUpdateState(_ c: CBCentralManager) {
+        SDLog.log("Bluetooth state \(c.state.rawValue) (5 = on), authorization \(CBManager.authorization.rawValue) (3 = allowed)")
         if c.state == .poweredOn { scan() }
     }
 
@@ -146,6 +148,7 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
         defer { finish(p) }
         guard let data = ch.value, let c = try? JSONDecoder().decode(BLECard.self, from: data) else { return }
+        SDLog.log("Bluetooth card from \(c.a) (\(c.ip.joined(separator: ", ")))")
         onCard?(c)
     }
 

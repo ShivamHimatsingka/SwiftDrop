@@ -68,7 +68,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         if config.multicast {
             do { try discovery.start() } catch {
                 // Not fatal: HTTP subnet scanning still finds devices.
-                NSLog("SwiftDrop: multicast unavailable (\(error)); using HTTP scan")
+                SDLog.log("multicast unavailable (\(error)); using HTTP scan")
             }
         }
 
@@ -413,9 +413,11 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         guard let svc = stateLock.withLock({ knownPeers[peer.id]?.awdlService ?? peer.awdlService }), pref != .off,
               config.directLink else { return .lan }
         if pref == .always || !peer.hasLAN { return .direct(svc) }
-        // Automatic: stay on the shared network when it works (keeps AWDL channel-hopping off).
-        let ok = (try? await client.register(base: peer.baseURL, me: myInfo(announce: nil), probe: true)) != nil
-        return ok ? .lan : .direct(svc)
+        // Automatic: like AirDrop, prefer the peer-to-peer link when the device is on it —
+        // in testing it was ~4× faster than going through the Wi‑Fi router (43 vs 11 MB/s).
+        // Only when the device is visible on the peer-to-peer interface; the connection is then
+        // pinned to it (otherwise the system would quietly choose the router path).
+        return P2PBrowser.interfaces.get(svc) != nil ? .direct(svc) : .lan
     }
 
     func send(_ payload: OutgoingPayload, to peer: Peer, update: @escaping TransferUpdate) async throws {
@@ -425,7 +427,8 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         let request = LSPrepareUploadRequest(info: myInfo(announce: nil),
                                              files: Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0.dto) }))
         let route = await route(for: peer)
-        if case .direct = route { NSLog("SwiftDrop: sending to \(peer.alias) over direct Wi‑Fi link") }
+        SDLog.log("route to \(peer.alias): \(route) (awdl seen: \(peer.awdlService.flatMap { P2PBrowser.interfaces.get($0)?.name } ?? "no"))")
+        if case .direct = route { SDLog.log("sending to \(peer.alias) over direct Wi‑Fi link") }
         let channel = Channel(route: route, peer: peer, client: client)
         let result = try await channel.prepare(request)
         guard case .accepted(let resp) = result else { update(.done, 1); return }
@@ -470,13 +473,16 @@ struct Channel: Sendable {
     let client: LocalSendClient
 
     private var tls: Bool { peer.scheme == "https" }
+    /// Direct routes are pinned to the peer-to-peer interface whenever the browser saw one.
+    private var p2pOnly: Bool { true }
 
     func prepare(_ request: LSPrepareUploadRequest) async throws -> PrepareResult {
         guard case .direct(let svc) = route else { return try await client.prepareUpload(peer: peer, request: request) }
         let (code, data): (Int, Data)
         do {
             (code, data) = try await P2PHTTP.request(service: svc, tls: tls, method: "POST", path: "/api/localsend/v2/prepare-upload",
-                                                     body: .data(try JSONEncoder().encode(request)), timeout: 600)
+                                                     body: .data(try JSONEncoder().encode(request)), timeout: 600,
+                                                     peerToPeerOnly: p2pOnly)
         } catch { throw TransferError.unreachable(error.localizedDescription) }
         switch code {
         case 200: return .accepted(try JSONDecoder().decode(LSPrepareUploadResponse.self, from: data))
@@ -495,14 +501,14 @@ struct Channel: Sendable {
         let (code, _) = try await P2PHTTP.request(service: svc, tls: tls, method: "POST", path: "/api/localsend/v2/upload",
                                                   query: ["sessionId": sessionId, "fileId": fileId, "token": token],
                                                   body: .file(file), contentType: "application/octet-stream", timeout: 120,
-                                                  progress: progress)
+                                                  peerToPeerOnly: p2pOnly, progress: progress)
         if code != 200 { throw TransferError.server(code) }
     }
 
     func cancel(sessionId: String) async {
         guard case .direct(let svc) = route else { return await client.cancel(peer: peer, sessionId: sessionId) }
         _ = try? await P2PHTTP.request(service: svc, tls: tls, method: "POST", path: "/api/localsend/v2/cancel",
-                                       query: ["sessionId": sessionId], timeout: 4)
+                                       query: ["sessionId": sessionId], timeout: 4, peerToPeerOnly: p2pOnly)
     }
 }
 
@@ -564,8 +570,8 @@ struct LocalSendConfig {
     var advertise = true
 }
 
-/// When to use the direct Wi‑Fi link: "auto" (only if the normal network can't reach the
-/// device), "always", or "off". Stored in UserDefaults key `directLink`.
+/// When to use the direct Wi‑Fi link: "auto" (whenever the device is reachable over it, else
+/// the normal network), "always", or "off". Stored in UserDefaults key `directLink`.
 enum DirectLinkPreference: String, CaseIterable, Identifiable {
     case auto, always, off
     var id: String { rawValue }

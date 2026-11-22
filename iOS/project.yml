@@ -10,6 +10,9 @@ settings:
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: ""
+    # Bundle IDs must be unique per Apple developer: build with
+    #   SWIFTDROP_BUNDLE_PREFIX=com.yourname DEVELOPMENT_TEAM=XXXXXXXXXX
+    SWIFTDROP_BUNDLE_PREFIX: com.swiftdrop
 targets:
   SwiftDrop:
     type: application
@@ -36,7 +39,7 @@ targets:
         "UISupportedInterfaceOrientations~ipad": [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortraitUpsideDown]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.swiftdrop.ios
+        PRODUCT_BUNDLE_IDENTIFIER: $(SWIFTDROP_BUNDLE_PREFIX).ios
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
@@ -63,5 +66,5 @@ targets:
             NSExtensionActivationRule: 'SUBQUERY (extensionItems, $extensionItem, SUBQUERY ($extensionItem.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.item" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.content").@count >= 1).@count >= 1'
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.swiftdrop.ios.share
+        PRODUCT_BUNDLE_IDENTIFIER: $(SWIFTDROP_BUNDLE_PREFIX).ios.share
         TARGETED_DEVICE_FAMILY: "1,2"

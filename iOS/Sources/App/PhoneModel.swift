@@ -250,7 +250,10 @@ final class PhoneModel: ObservableObject, TransportHost {
         guard url.scheme == "swiftdrop", url.host == "send",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               let to = items.first(where: { $0.name == "to" })?.value else { return }
-        let payload = OutgoingPayload(fileURLs: items.filter { $0.name == "file" }.compactMap { $0.value }.map { URL(fileURLWithPath: $0) },
+        // Relative paths are inside SwiftDrop's own container (e.g. "Documents/x.pdf").
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let payload = OutgoingPayload(fileURLs: items.filter { $0.name == "file" }.compactMap { $0.value }
+                                        .map { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : home.appendingPathComponent($0) },
                                       texts: items.filter { $0.name == "text" }.compactMap(\.value))
         refresh(deep: false)
         Task {
