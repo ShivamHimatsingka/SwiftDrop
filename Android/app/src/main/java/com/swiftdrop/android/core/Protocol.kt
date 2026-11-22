@@ -54,7 +54,10 @@ data class FileDto(val id: String, val fileName: String, val size: Long, val fil
 data class Peer(
     val id: String, val alias: String, val deviceModel: String?, val deviceType: String?,
     val host: String, val port: Int, val scheme: String, val lastSeen: Long = System.currentTimeMillis(),
+    /** Found over Bluetooth but not on our network: reachable through Wi‑Fi Direct. */
+    val bleAddress: String? = null, val wifiDirect: Boolean = false,
 ) {
+    val hasLan get() = host.isNotEmpty()
     val baseUrl get() = "$scheme://${if (host.contains(':')) "[$host]" else host}:$port"
     val caption get() = deviceModel ?: when (deviceType) { "mobile" -> "Phone"; "web" -> "Browser"; else -> "Computer" }
 }

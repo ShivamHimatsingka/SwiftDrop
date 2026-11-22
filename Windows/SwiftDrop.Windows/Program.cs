@@ -70,6 +70,7 @@ public sealed class App : Application
 {
     public Engine Engine { get; private set; } = null!;
     Forms.NotifyIcon? _tray;
+    Bluetooth? _bluetooth;
     FlyoutWindow? _flyout;
     IncomingWindow? _incoming;
     readonly List<string> _queued = new();
@@ -84,6 +85,8 @@ public sealed class App : Application
         Engine.MessageReceived += (from, text) => Dispatcher.BeginInvoke(() =>
             new MessageWindow(from, text).Show());
         Engine.Start();
+        _bluetooth = new Bluetooth(Engine);
+        _ = _bluetooth.Start();
         Integration.Register();
 
         var exe = Environment.ProcessPath!;
@@ -112,6 +115,7 @@ public sealed class App : Application
         _flyout ??= new FlyoutWindow(this);
         if (pending != null) _flyout.Pending = pending;
         Engine.Refresh(deep: Engine.Peers.Count == 0);
+        _bluetooth?.Refresh();
         _flyout.ShowNearTray(centered: pending != null);
     }
 

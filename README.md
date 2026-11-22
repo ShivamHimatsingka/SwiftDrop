@@ -13,7 +13,7 @@ so it also works with every device that already runs LocalSend (Linux included).
 | Receive with nothing open | ✅ menu bar app, starts at login | ⚠️ app must be open (iOS restriction) | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
 | Accept prompt | Notification-style banner | AirDrop-style card | Heads-up notification + card | Toast above the tray |
 | Visibility | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone |
-| Size | 2.3 MB | 2.5 MB | 2 MB APK | 350 KB exe |
+| Size | 2.4 MB | 2.5 MB | 2 MB APK | 25 MB exe (incl. Windows Bluetooth bindings) |
 
 Everything streams straight to disk, so files of any size and any format work. Folders keep their structure.
 Transfers are encrypted (HTTPS with per-device self-signed certificates, like LocalSend).
@@ -51,10 +51,15 @@ Download from the [latest release](../../releases/latest).
 
 ### iPhone / iPad (iOS 17+)
 Apple doesn't allow installing apps outside the App Store or Xcode, so build it yourself (free Apple ID is enough):
-1. Open `iOS/SwiftDrop.xcodeproj` in Xcode 16+.
-2. For both targets (*SwiftDrop* and *SwiftDropShare*): Signing & Capabilities ▸ choose your Team
-   (change the bundle IDs if Xcode asks).
-3. Plug in your iPhone, select it, and press **Run**. Allow **Local Network** on first launch.
+1. In Xcode ▸ Settings ▸ Accounts, sign in with your Apple ID. On the iPhone, turn on
+   Settings ▸ Privacy & Security ▸ **Developer Mode** (it restarts; no data is erased).
+2. Open `iOS/SwiftDrop.xcodeproj`. In **Build Settings** of the project, set `SWIFTDROP_BUNDLE_PREFIX` to something
+   unique to you (e.g. `com.yourname`). Then pick your **Team** under Signing & Capabilities for both targets.
+   Or build from Terminal:
+   `xcodebuild -project iOS/SwiftDrop.xcodeproj -scheme SwiftDrop -destination 'id=<iPhone UDID>' -allowProvisioningUpdates DEVELOPMENT_TEAM=<team> SWIFTDROP_BUNDLE_PREFIX=com.yourname build`
+3. Plug in your iPhone, select it, and press **Run**. The first time, trust yourself in Settings ▸ General ▸
+   VPN & Device Management. Allow **Local Network** and **Bluetooth**.
+   With a free Apple ID the app must be re-run from Xcode every 7 days.
 4. Send: **Share ▸ SwiftDrop** from Photos, Files, Safari… Receive: keep SwiftDrop open.
    Photos and videos you receive go to your Photos library; everything else goes to **Files ▸ On My iPhone ▸ SwiftDrop**.
 
@@ -67,6 +72,32 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
 
 ---
 
+## Bluetooth discovery and direct Wi‑Fi links
+
+Every app advertises a small SwiftDrop Bluetooth LE "card" (name, model, IP addresses, port) and reads
+other devices' cards. That finds devices even on networks that block discovery, such as guest or office Wi‑Fi.
+When two devices aren't on the same network, SwiftDrop can make its own Wi‑Fi link between them,
+**without ever switching either device off its current Wi‑Fi**:
+
+| Between | Direct link | Notes |
+|---|---|---|
+| Mac ↔ iPhone/iPad, Mac ↔ Mac, iPhone ↔ iPhone | Apple peer-to-peer Wi‑Fi (AWDL, the link AirDrop uses) | No prompts; internet stays connected |
+| Android ↔ Android | Wi‑Fi Direct (set up over Bluetooth) | Receiver only opens a group for senders it would accept |
+| Windows ↔ anything, Android ↔ Apple | Bluetooth discovery only | These need a shared network: Apple doesn't support Wi‑Fi Direct, and Windows needs pairing dialogs |
+
+**Settings ▸ Direct Wi‑Fi link** (Mac and iPhone): *Automatic* (default) uses the direct link whenever the other
+Apple device is in range, like AirDrop, and the normal network otherwise. *Always* insists on it, and *Off* disables it.
+
+Measured between a MacBook Air and an iPhone SE on the same home Wi‑Fi (300 MB file):
+
+| Route | Mac → iPhone |
+|---|---|
+| Direct link (peer-to-peer Wi‑Fi) | **7–8 s (~40 MB/s)** |
+| Through the Wi‑Fi router | 22–27 s (~12 MB/s) |
+
+How much faster the direct link is depends on your router. The direct link also works with no shared network at all.
+Connection events are logged to `~/Library/Logs/SwiftDrop/SwiftDrop.log` on the Mac.
+
 ## Platform notes (honest limits)
 
 - **iOS can't receive in the background.** Only Apple's AirDrop may listen for transfers when the app
@@ -74,9 +105,10 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
   ~30 s after you leave it. Sending through the Share sheet works any time.
 - **"No app" on Android** is as close as Android allows: there's no screen to open, but Android
   requires a (minimised, silent) notification for any background service.
-- **Discovery** uses LocalSend's multicast announcements, with an automatic subnet scan as a fallback
-  for networks that block multicast (some guest/enterprise Wi-Fi). Devices must be on the same network.
-  SwiftDrop doesn't create its own Wi-Fi link the way AirDrop does.
+- **Discovery** uses LocalSend's multicast announcements, Bluetooth LE, Bonjour, and a subnet scan as a last resort.
+  Plain LocalSend apps (without SwiftDrop) are only found over Wi‑Fi.
+- **iPhone Bluetooth** advertising only runs while SwiftDrop is open (an iOS limit).
+- **Wi‑Fi Direct** credentials travel over Bluetooth LE without pairing. The transfer itself is still TLS-encrypted.
 - **Windows' built-in Nearby Sharing and Android's Quick Share** use proprietary protocols. See
   [docs/NativeReceiving.md](docs/NativeReceiving.md) for the plan to add Quick Share so stock Android phones
   can receive with nothing installed.
@@ -107,6 +139,11 @@ docs/           NativeReceiving.md — the plan for receiving with nothing insta
 ```
 
 ## Tested
+**Mac ↔ real iPhone (iPhone SE, iOS):** Bluetooth discovery (the Mac read the iPhone's card within 2.5 s), and 300 MB
+transfers in both directions over the direct link and over normal Wi‑Fi. Every file was byte-identical, and
+interface byte counters confirmed which link carried each transfer. Android Wi‑Fi Direct and Windows Bluetooth are
+built but untested on hardware.
+
 Every direction was tested between the Mac app, an iOS 27 simulator, an Android 15 emulator, and the Windows
 engine (via the CLI). Each test sent a folder with subfolders, a 50 MB binary, a photo and a text message, and
 every file arrived byte-for-byte identical (12/12 directions). The accept/decline prompts, auto-accept favourites,

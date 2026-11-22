@@ -40,11 +40,22 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         Engine.init(this)
         if (Engine.mode.value != ReceiveMode.OFF) ReceiverService.start(this)
-        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        val perms = mutableListOf(Manifest.permission.POST_NOTIFICATIONS)
+        if (android.os.Build.VERSION.SDK_INT >= 31) perms += listOf(Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
+        else perms += Manifest.permission.ACCESS_FINE_LOCATION
+        if (android.os.Build.VERSION.SDK_INT >= 33) perms += Manifest.permission.NEARBY_WIFI_DEVICES
+        else if (android.os.Build.VERSION.SDK_INT >= 31) perms += Manifest.permission.ACCESS_FINE_LOCATION
+        requestPermissions(perms.toTypedArray(), 1)
         setContent { MaterialTheme(colorScheme = lightColorScheme(primary = IOS.blue)) { Home() } }
     }
 
     override fun onResume() { super.onResume(); Engine.refresh() }
+
+    override fun onRequestPermissionsResult(code: Int, perms: Array<String>, results: IntArray) {
+        super.onRequestPermissionsResult(code, perms, results)
+        Engine.restartBluetooth()
+    }
 }
 
 @Composable

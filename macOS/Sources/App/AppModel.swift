@@ -46,6 +46,9 @@ final class AppModel: ObservableObject, TransportHost {
     @Published var saveDirectoryPath: String {
         didSet { UserDefaults.standard.set(saveDirectoryPath, forKey: Keys.saveDir) }
     }
+    @Published var directLink: DirectLinkPreference = .current {
+        didSet { UserDefaults.standard.set(directLink.rawValue, forKey: "directLink"); restartTransports() }
+    }
     @Published var playSounds: Bool {
         didSet { UserDefaults.standard.set(playSounds, forKey: Keys.sounds) }
     }

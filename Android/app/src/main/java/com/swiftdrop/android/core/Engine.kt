@@ -69,6 +69,8 @@ object Engine {
     @Volatile private var started = false
     @Volatile private var browsingUntil = 0L
     private val misses = ConcurrentHashMap<String, Int>()
+    private var ble: Ble? = null
+    private var wifiDirect: WifiDirect? = null
 
     private val prefs get() = app.getSharedPreferences("swiftdrop", Context.MODE_PRIVATE)
     var deviceName: String
@@ -90,7 +92,7 @@ object Engine {
         port = prefs.getInt("port", LS.PORT)
     }
 
-    fun setMode(m: ReceiveMode) { mode.value = m; prefs.edit().putString("mode", m.name).apply(); if (m != ReceiveMode.OFF) announce() }
+    fun setMode(m: ReceiveMode) { mode.value = m; prefs.edit().putString("mode", m.name).apply(); announce() }
 
     /** "Pixel 9", "Galaxy S24" stay as-is; codes like "SM-S918B" become the brand ("Samsung"). */
     private val friendlyModel: String = Build.MODEL.let { m ->
@@ -110,19 +112,59 @@ object Engine {
         val wifi = app.getSystemService(Context.WIFI_SERVICE) as WifiManager
         mcLock = wifi.createMulticastLock("swiftdrop").apply { setReferenceCounted(false); acquire() }
         discovery = Discovery(::onMulticast).also { runCatching { it.start() } }
+        wifiDirect = WifiDirect(app)
+        ble = Ble(app).also { b ->
+            b.card = {
+                if (!isDiscoverable(null)) null
+                else BleCard(deviceName, fingerprint, friendlyModel, "mobile", port, scheme, ipv4s(),
+                             if (wifiDirect?.supported == true) listOf("wfd") else emptyList())
+            }
+            b.onCard = ::onBleCard
+            b.onConnectRequest = { fp -> if (canReceive(fp)) wifiDirect?.hostGroup(port) else null }
+            b.start()
+        }
         announce()
         io.execute { Thread.sleep(1500); announce() }
     }
 
-    fun announce() { if (started && isDiscoverable(null)) discovery?.send(me(true)) }
+    fun announce() {
+        ble?.updateAdvertising()
+        if (started && isDiscoverable(null)) discovery?.send(me(true))
+    }
+
+    /** Restart Bluetooth after permissions are granted. */
+    fun restartBluetooth() { ble?.stop(); ble?.start() }
+
+    private fun ipv4s() = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }.filterIsInstance<java.net.Inet4Address>().mapNotNull { it.hostAddress }
+    }.getOrDefault(emptyList())
+
+    /** A Bluetooth card: reach the device over Wi‑Fi if we can, otherwise offer Wi‑Fi Direct. */
+    private fun onBleCard(card: BleCard, address: String) {
+        if (card.fingerprint == fingerprint || peers.value.any { it.id == card.fingerprint && it.hasLan }) return
+        io.execute {
+            val me = me()
+            for (ip in card.ips) {
+                val hit = Client.probe(ip, card.port, me)
+                if (hit != null) { ingest(hit.first, ip, card.port, hit.second); return@execute }
+            }
+            if ("wfd" in card.caps && wifiDirect?.supported == true) {
+                val p = Peer(card.fingerprint, card.alias, card.model, card.type, "", card.port, card.scheme,
+                             bleAddress = address, wifiDirect = true)
+                peers.update { l -> (l.filterNot { it.id == p.id } + p).sortedWith(compareBy({ !isFavorite(it.id) }, { it.alias.lowercase() })) }
+            }
+        }
+    }
 
     /** Called while a sending UI is visible: announce + re-check peers (+ subnet scan). */
     fun refresh(deep: Boolean = false) {
         ensureStarted()
         browsingUntil = System.currentTimeMillis() + 120_000
+        ble?.refresh()
         discovery?.joinAll()
         discovery?.send(me(true))
-        val known = peers.value
+        val known = peers.value.filter { it.hasLan }
         io.execute {
             known.forEach { p -> io.execute {
                 val ok = runCatching { Client.postJson("${p.baseUrl}/api/localsend/v2/register", me().toJson(), 4000) }.getOrNull()?.first == 200
@@ -318,7 +360,20 @@ object Engine {
     private fun setPhase(id: String, p: Phase, f: Float, force: Boolean = false) =
         transfers.update { m -> if (!force && m[id]?.first?.terminal == true) m else m + (id to (p to f)) }
 
-    private fun doSend(peer: Peer, items: List<OutItem>) {
+    /** Peers found only over Bluetooth: set up Wi‑Fi Direct first, then talk LocalSend over it. */
+    private fun resolve(peer: Peer): Peer {
+        if (peer.hasLan || !peer.wifiDirect || peer.bleAddress == null) return peer
+        val reply = ble?.requestConnect(peer.bleAddress, fingerprint)
+            ?: throw TransferException(Phase.FAILED, "Couldn’t reach ${peer.alias} over Bluetooth")
+        if (reply.contains("\"wait\"")) throw TransferException(Phase.DECLINED, "${peer.alias} isn’t accepting")
+        val ip = wifiDirect?.join(reply) ?: throw TransferException(Phase.FAILED, "Wi‑Fi Direct connection failed")
+        val port = runCatching { JSONObject(reply).getInt("p") }.getOrDefault(peer.port)
+        android.util.Log.i("SwiftDrop", "sending to ${peer.alias} over Wi‑Fi Direct ($ip)")
+        return peer.copy(host = ip, port = port)
+    }
+
+    private fun doSend(original: Peer, items: List<OutItem>) {
+        val peer = resolve(original)
         val ids = items.map { UUID.randomUUID().toString() }
         val files = JSONObject()
         items.forEachIndexed { i, it -> files.put(ids[i], FileDto(ids[i], it.name, maxOf(0, it.size), it.mime, it.preview).toJson()) }

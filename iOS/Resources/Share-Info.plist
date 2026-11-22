@@ -27,6 +27,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>SwiftDrop uses Bluetooth to find nearby devices, even when you're not on the same Wi‑Fi.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_swiftdrop._tcp</string>
+	</array>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
