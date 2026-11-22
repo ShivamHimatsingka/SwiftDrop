@@ -58,6 +58,15 @@ final class PhoneModel: ObservableObject, TransportHost {
         #if DEBUG
         // UI-test hook: -SwiftDropTestSend "swiftdrop://send?to=…"
         if let u = UserDefaults.standard.string(forKey: "SwiftDropTestSend"), let url = URL(string: u) { handle(url) }
+        // Test cleanup: -SwiftDropTestDelete "Documents/a.bin|Library/TestOut" — only inside this app's container.
+        if let list = UserDefaults.standard.string(forKey: "SwiftDropTestDelete") {
+            let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
+            for rel in list.split(separator: "|").map(String.init) where !rel.contains("..") {
+                let target = home.appendingPathComponent(rel).standardizedFileURL
+                guard target.path.hasPrefix(home.path + "/Documents/") || target.path.hasPrefix(home.path + "/Library/TestOut") else { continue }
+                try? FileManager.default.removeItem(at: target)
+            }
+        }
         #endif
     }
 
