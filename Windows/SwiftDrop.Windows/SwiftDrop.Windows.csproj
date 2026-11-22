@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>SwiftDrop</AssemblyName>
+    <RootNamespace>SwiftDrop.Windows</RootNamespace>
+    <ApplicationIcon>SwiftDrop.ico</ApplicationIcon>
+    <StartupObject>SwiftDrop.Windows.Program</StartupObject>
+    <Version>1.0.0</Version>
+    <!-- Single self-contained exe; trimming is off because WPF does not support it. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SwiftDrop.Core/SwiftDrop.Core.csproj" />
+    <Resource Include="SwiftDrop.ico" />
+  </ItemGroup>
+</Project>

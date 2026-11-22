@@ -1,0 +1,19 @@
+.DS_Store
+# macOS
+macOS/build/
+# iOS
+iOS/build/
+iOS/*.xcodeproj/xcuserdata/
+iOS/*.xcodeproj/project.xcworkspace/xcuserdata/
+# Android
+Android/.gradle/
+Android/build/
+Android/app/build/
+Android/local.properties
+Android/.kotlin/
+# Windows / .NET
+Windows/**/bin/
+Windows/**/obj/
+Windows/dist/
+# Release staging
+dist/
