@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
+signal(SIGPIPE, SIG_IGN)   // a peer closing mid-write must be an error, not a crash
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

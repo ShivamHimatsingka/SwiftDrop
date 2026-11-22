@@ -7,6 +7,12 @@ struct SwiftDropApp: App {
     @StateObject private var model = PhoneModel.shared
     @Environment(\.scenePhase) private var phase
 
+    init() {
+        // iOS closes our sockets while the app is paused; writing to one afterwards raises
+        // SIGPIPE, which would kill the app on unlock. Treat it as a normal I/O error instead.
+        signal(SIGPIPE, SIG_IGN)
+    }
+
     var body: some Scene {
         WindowGroup {
             HomeView(model: model)
@@ -14,7 +20,8 @@ struct SwiftDropApp: App {
                 .onOpenURL { model.handle($0) }
         }
         .onChange(of: phase) { _, p in
-            if p == .active { model.refresh() }
+            SDLog.log("scene → \(p)")
+            if p == .active { model.didBecomeActive() }
             if p == .background { model.didEnterBackground() }
         }
     }

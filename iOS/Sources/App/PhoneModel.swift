@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import Photos
 import UniformTypeIdentifiers
+import UserNotifications
 
 /// iOS app state. iOS only lets a third-party app listen for transfers while it
 /// is in the foreground (plus a short grace period when a transfer is running).
@@ -27,6 +28,10 @@ final class PhoneModel: ObservableObject, TransportHost {
     private var tasks: [String: Task<Void, Never>] = [:]
     private var promptContinuation: CheckedContinuation<IncomingDecision, Never>?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
+    private var wasBackgrounded = false
+    /// Senders whose "Tap to receive" notification was tapped: accept their next offer.
+    private var consent: [String: Date] = [:]
+    private let notifications = NotificationHandler()
 
     private init() {
         let d = UserDefaults.standard
@@ -50,9 +55,14 @@ final class PhoneModel: ObservableObject, TransportHost {
         let cfg = LocalSendConfig(port: port == 0 ? LocalSendConstants.port : port,
                                   deviceModel: idiom == .pad ? "iPad" : "iPhone",
                                   deviceType: "mobile",
-                                  tls: TLSIdentityStore.loadOrCreate())
+                                  tls: TLSIdentityStore.loadOrCreate(), wakeable: true)
         let t = LocalSendTransport(config: cfg)
+        t.onWake = { [weak self] knock in Task { @MainActor in self?.knocked(knock) } }
         transport = t
+        notifications.onTap = { [weak self] fp in Task { @MainActor in self?.consent[fp] = Date().addingTimeInterval(120) } }
+        UNUserNotificationCenter.current().delegate = notifications
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        SDLog.log("launched (\(UIApplication.shared.applicationState == .background ? "in background" : "foreground"))")
         t.start(host: self)
         refresh(deep: true)
         #if DEBUG
@@ -72,7 +82,25 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     func refresh(deep: Bool = false) { transport?.refresh(deep: deep) }
 
+    func didBecomeActive() {
+        if wasBackgrounded { wasBackgrounded = false; transport?.resumeAfterBackground() } else { refresh() }
+    }
+
+    /// A Mac (or another device) knocked over Bluetooth while we were paused.
+    private func knocked(_ k: BLEWake) {
+        guard canReceive(from: k.f) else { return }
+        if UIApplication.shared.applicationState == .active { refresh(); return }   // already listening
+        let content = UNMutableNotificationContent()
+        content.title = "SwiftDrop"
+        content.body = "“\(k.a)” wants to send \(k.n). Tap to receive."
+        content.sound = .default
+        content.userInfo = ["fp": k.f]
+        content.interruptionLevel = .timeSensitive
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "knock-\(k.f)", content: content, trigger: nil))
+    }
+
     func didEnterBackground() {
+        wasBackgrounded = true
         let busy = incoming?.phase == .receiving || transfers.values.contains { $0.phase.isActive }
         guard busy, bgTask == .invalid else { return }
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "SwiftDrop transfer") { [weak self] in
@@ -116,6 +144,12 @@ final class PhoneModel: ObservableObject, TransportHost {
     }
 
     func transportShouldAccept(_ offer: IncomingOffer) async -> IncomingDecision {
+        if let until = consent.removeValue(forKey: offer.senderID), until > Date() {   // they tapped "Tap to receive"
+            let state = IncomingState(offer: offer)
+            state.phase = .receiving
+            incoming = state
+            return .accept
+        }
         let state = IncomingState(offer: offer)
         if favorites.first(where: { $0.id == offer.senderID })?.autoAccept == true {
             state.phase = .receiving
@@ -310,4 +344,16 @@ final class PhoneModel: ObservableObject, TransportHost {
 extension TransferError {
     var isDeclined: Bool { if case .declined = self { return true }; return false }
     var isCancelled: Bool { if case .cancelled = self { return true }; return false }
+}
+
+/// Taps on "Tap to receive" notifications.
+final class NotificationHandler: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    var onTap: ((String) -> Void)?
+    func userNotificationCenter(_ c: UNUserNotificationCenter, didReceive r: UNNotificationResponse,
+                                withCompletionHandler done: @escaping () -> Void) {
+        if let fp = r.notification.request.content.userInfo["fp"] as? String { onTap?(fp) }
+        done()
+    }
+    func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification,
+                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) { done([]) }
 }

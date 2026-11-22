@@ -10,7 +10,7 @@ so it also works with every device that already runs LocalSend (Linux included).
 |---|---|---|---|---|
 | Tech | Swift + SwiftUI | Swift + SwiftUI | Kotlin + Compose | .NET 8 + WPF |
 | Send from the system share menu | Finder ▸ Share ▸ SwiftDrop | Share sheet ▸ SwiftDrop | Share ▸ SwiftDrop | Explorer ▸ right-click ▸ Send with SwiftDrop |
-| Receive with nothing open | ✅ menu bar app, starts at login | ⚠️ app must be open (iOS restriction) | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
+| Receive with nothing open | ✅ menu bar app, starts at login | ✅ even when locked: a Bluetooth knock shows a "Tap to receive" notification | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
 | Accept prompt | Notification-style banner | AirDrop-style card | Heads-up notification + card | Toast above the tray |
 | Visibility | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone |
 | Size | 2.4 MB | 2.5 MB | 2 MB APK | 25 MB exe (incl. Windows Bluetooth bindings) |
@@ -100,9 +100,12 @@ Connection events are logged to `~/Library/Logs/SwiftDrop/SwiftDrop.log` on the 
 
 ## Platform notes (honest limits)
 
-- **iOS can't receive in the background.** Only Apple's AirDrop may listen for transfers when the app
-  isn't on screen, so SwiftDrop receives while it's open, and finishes transfers already in progress for
-  ~30 s after you leave it. Sending through the Share sheet works any time.
+- **iPhone receiving while locked or in the background.** iOS pauses every app except AirDrop, so SwiftDrop can't
+  listen on the network then. It keeps a Bluetooth service available instead (iOS allows that in the background).
+  When a Mac can't reach the paused iPhone, it knocks over Bluetooth, and the iPhone shows
+  **"“Mac” wants to send 3 items. Tap to receive."** Tapping it opens SwiftDrop and the transfer completes without
+  a second Accept. Allow notifications for this to work. Sending works any time.
+  (The knock is sent by the Mac app today; Android and Windows senders don't knock yet.)
 - **"No app" on Android** is as close as Android allows: there's no screen to open, but Android
   requires a (minimised, silent) notification for any background service.
 - **Discovery** uses LocalSend's multicast announcements, Bluetooth LE, Bonjour, and a subnet scan as a last resort.
@@ -140,7 +143,8 @@ docs/           NativeReceiving.md — the plan for receiving with nothing insta
 
 ## Tested
 **Mac ↔ real iPhone (iPhone SE, iOS):** Bluetooth discovery (the Mac read the iPhone's card within 2.5 s), and 300 MB
-transfers in both directions over the direct link and over normal Wi‑Fi. Every file was byte-identical, and
+transfers in both directions over the direct link and over normal Wi‑Fi, and Bluetooth wake-up of a locked iPhone
+(knock delivered in 0.5 s; transfer finished 6 s after the knock, including the tap). Every file was byte-identical, and
 interface byte counters confirmed which link carried each transfer. Android Wi‑Fi Direct and Windows Bluetooth are
 built but untested on hardware.
 

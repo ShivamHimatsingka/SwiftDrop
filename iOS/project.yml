@@ -28,6 +28,7 @@ targets:
         CFBundleDisplayName: SwiftDrop
         UILaunchScreen: {}
         UIFileSharingEnabled: true
+        UIBackgroundModes: [bluetooth-peripheral]
         LSSupportsOpeningDocumentsInPlace: true
         NSLocalNetworkUsageDescription: SwiftDrop finds nearby phones and computers on your Wi‑Fi to share files.
         NSBonjourServices: [_swiftdrop._tcp]
