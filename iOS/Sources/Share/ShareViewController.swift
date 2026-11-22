@@ -44,7 +44,7 @@ final class ShareModel: ObservableObject, TransportHost {
 
     func start() {
         let cfg = LocalSendConfig(port: 53318, deviceModel: UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
-                                  deviceType: "mobile", tls: nil)
+                                  deviceType: "mobile", tls: nil, advertise: false)
         let t = LocalSendTransport(config: cfg)
         transport = t
         t.start(host: self)

@@ -18,8 +18,11 @@ struct Peer: Identifiable, Hashable, Sendable {
     var port: Int
     var scheme: String
     var lastSeen: Date
+    /// Bonjour service name when reachable over Apple peer-to-peer Wi‑Fi (AWDL).
+    var awdlService: String? = nil
 
-    var baseURL: URL { URL(string: "\(scheme)://\(host):\(port)")! }
+    var hasLAN: Bool { !host.isEmpty }
+    var baseURL: URL { URL(string: "\(scheme)://\(host.contains(":") ? "[\(host)]" : host):\(port)")! }
 }
 
 struct OutgoingPayload: Sendable {

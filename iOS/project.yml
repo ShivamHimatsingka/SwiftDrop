@@ -27,7 +27,8 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSLocalNetworkUsageDescription: SwiftDrop finds nearby phones and computers on your Wi‑Fi to share files.
-        NSBonjourServices: []
+        NSBonjourServices: [_swiftdrop._tcp]
+        NSBluetoothAlwaysUsageDescription: SwiftDrop uses Bluetooth to find nearby devices, even when you're not on the same Wi‑Fi.
         NSPhotoLibraryAddUsageDescription: SwiftDrop saves photos and videos you receive to your library.
         NSAppTransportSecurity: { NSAllowsLocalNetworking: true, NSAllowsArbitraryLoads: true }
         CFBundleURLTypes: [{ CFBundleURLName: com.swiftdrop.ios, CFBundleURLSchemes: [swiftdrop] }]
@@ -52,6 +53,8 @@ targets:
       properties:
         CFBundleDisplayName: SwiftDrop
         NSLocalNetworkUsageDescription: SwiftDrop finds nearby phones and computers on your Wi‑Fi to share files.
+        NSBonjourServices: [_swiftdrop._tcp]
+        NSBluetoothAlwaysUsageDescription: SwiftDrop uses Bluetooth to find nearby devices, even when you're not on the same Wi‑Fi.
         NSAppTransportSecurity: { NSAllowsLocalNetworking: true, NSAllowsArbitraryLoads: true }
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services

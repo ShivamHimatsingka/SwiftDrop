@@ -17,6 +17,8 @@
 	<key>LSUIElement</key><true/>
 	<key>NSHumanReadableCopyright</key><string>SwiftDrop</string>
 	<key>NSLocalNetworkUsageDescription</key><string>SwiftDrop finds and sends files to nearby devices running LocalSend on your network.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key><string>SwiftDrop uses Bluetooth to find nearby devices, even on networks that hide them.</string>
+	<key>NSBonjourServices</key><array><string>_swiftdrop._tcp</string></array>
 	<key>NSDownloadsFolderUsageDescription</key><string>SwiftDrop saves received files to your Downloads folder.</string>
 	<key>NSDesktopFolderUsageDescription</key><string>SwiftDrop reads the files you choose to send.</string>
 	<key>NSDocumentsFolderUsageDescription</key><string>SwiftDrop reads the files you choose to send.</string>

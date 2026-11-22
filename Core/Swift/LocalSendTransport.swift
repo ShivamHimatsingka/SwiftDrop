@@ -22,6 +22,10 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     private var _alias = "Mac"
     private var knownPeers: [String: Peer] = [:]
     private var missCount: [String: Int] = [:]
+    private let ble = BluetoothDiscovery()
+    private let p2pBrowser = P2PBrowser()
+    private var p2pNames: [String: String] = [:]          // fingerprint -> Bonjour service name
+    private var visibleCache = true                        // read off the main actor (BLE queue)
 
     private var alias: String {
         get { stateLock.lock(); defer { stateLock.unlock() }; return _alias }
@@ -73,10 +77,23 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             return await self.route(req)
         }
         server.onFailure = { [weak host] msg in Task { @MainActor in host?.transportDidFail(msg) } }
-        do { try server.start(port: config.port, tlsIdentity: tlsIdentity) } catch {
+        visibleCache = host.isDiscoverable(by: nil)
+        let p2p = config.directLink && DirectLinkPreference.current != .off
+        do { try server.start(port: config.port, tlsIdentity: tlsIdentity, peerToPeer: p2p,
+                              service: p2p && config.advertise && visibleCache ? bonjourService() : nil) } catch {
             host.transportDidFail("Could not listen on port \(config.port). Is LocalSend already running on this device?")
         }
         self.server = server
+
+        if config.bluetooth {
+            ble.card = { [weak self] in self?.bleCard() }
+            ble.onCard = { [weak self] card in self?.handleBLE(card) }
+            ble.start(advertise: config.advertise)
+        }
+        if p2p {
+            p2pBrowser.onChange = { [weak self] found in self?.handleP2P(found) }
+            p2pBrowser.start()
+        }
 
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
@@ -92,6 +109,8 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     }
 
     @MainActor func stop() {
+        ble.stop()
+        p2pBrowser.stop()
         discovery.stop()
         server?.stop()
         server = nil
@@ -104,13 +123,81 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     }
 
     @MainActor private func announceIfVisible() {
-        if host?.isDiscoverable(by: nil) == true { discovery.send(myInfo(announce: true)) }
+        let visible = host?.isDiscoverable(by: nil) == true
+        if visible != visibleCache {
+            visibleCache = visible
+            if config.advertise && config.directLink { server?.setService(visible ? bonjourService() : nil) }
+        }
+        ble.refresh()
+        if visible { discovery.send(myInfo(announce: true)) }
+    }
+
+    // MARK: Bluetooth + direct link
+
+    private func bonjourService() -> NWListener.Service {
+        NWListener.Service(name: "SwiftDrop-\(fingerprint.prefix(16))", type: P2P.serviceType,
+                           txtRecord: P2P.txt(fingerprint: fingerprint, alias: alias, model: config.deviceModel,
+                                              type: config.deviceType, scheme: scheme, port: Int(config.port)))
+    }
+
+    private func bleCard() -> BLECard? {
+        guard visibleCache, config.advertise else { return nil }
+        let caps = config.directLink && DirectLinkPreference.current != .off ? ["awdl"] : []
+        return BLECard(a: alias, f: fingerprint, m: config.deviceModel, t: config.deviceType, p: Int(config.port),
+                       s: scheme, ip: IPv4Interface.all().map(\.addressString), x: caps)
+    }
+
+    /// A Bluetooth card arrived: reach the device over the normal network if we can.
+    /// (Apple devices without a shared network are reached through the AWDL browser.)
+    private func handleBLE(_ card: BLECard) {
+        guard card.f != fingerprint, stateLock.withLock({ knownPeers[card.f]?.hasLAN != true }) else { return }
+        let me = myInfo(announce: nil)
+        Task.detached { [weak self] in
+            guard let self else { return }
+            for ip in card.ip {
+                if let (info, scheme) = await self.client.probe(host: ip, port: card.p, me: me) {
+                    self.ingest(info, host: ip, port: card.p, scheme: scheme); return
+                }
+            }
+        }
+    }
+
+    private func handleP2P(_ found: [P2PBrowser.Found]) {
+        let current = Dictionary(found.filter { $0.fingerprint != fingerprint }.map { ($0.fingerprint, $0) }, uniquingKeysWith: { a, b in a.isPeerToPeer ? a : b })
+        var updated: [Peer] = []
+        var lost: [String] = []
+        stateLock.withLock {
+            for (fp, f) in current {
+                var peer = knownPeers[fp] ?? Peer(id: fp, transportID: id, alias: f.alias, deviceModel: f.model,
+                                                  deviceType: f.type, host: "", port: 0, scheme: f.scheme, lastSeen: Date())
+                if peer.awdlService != f.serviceName || knownPeers[fp] == nil {
+                    peer.awdlService = f.serviceName
+                    peer.lastSeen = Date()
+                    knownPeers[fp] = peer
+                    updated.append(peer)
+                }
+                p2pNames[fp] = f.serviceName
+            }
+            for fp in p2pNames.keys where current[fp] == nil {
+                p2pNames[fp] = nil
+                guard var peer = knownPeers[fp] else { continue }
+                peer.awdlService = nil
+                if peer.hasLAN { knownPeers[fp] = peer; updated.append(peer) }
+                else { knownPeers[fp] = nil; lost.append(fp) }
+            }
+        }
+        Task { @MainActor [weak self] in
+            updated.forEach { self?.host?.transportDidUpdate($0) }
+            lost.forEach { self?.host?.transportDidLose($0) }
+        }
     }
 
     @MainActor func refresh(deep: Bool) {
+        visibleCache = true          // a sending UI is open: be findable while browsing
+        ble.refresh()
         discovery.joinGroups()
         discovery.send(myInfo(announce: true))
-        let peers = stateLock.withLock { Array(knownPeers.values) }
+        let peers = stateLock.withLock { Array(knownPeers.values.filter(\.hasLAN)) }
         let me = myInfo(announce: nil)
         Task.detached { [weak self] in
             guard let self else { return }
@@ -134,7 +221,13 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     private func noteMiss(_ peerID: String) {
         let drop: Bool = stateLock.withLock {
             missCount[peerID, default: 0] += 1
-            if missCount[peerID]! >= 2 { knownPeers[peerID] = nil; missCount[peerID] = nil; return true }
+            if missCount[peerID]! >= 2 {
+                missCount[peerID] = nil
+                if var p = knownPeers[peerID], p.awdlService != nil {   // still reachable directly
+                    p.host = ""; knownPeers[peerID] = p; return false
+                }
+                knownPeers[peerID] = nil; return true
+            }
             return false
         }
         if drop { Task { @MainActor [weak self] in self?.host?.transportDidLose(peerID) } }
@@ -163,10 +256,20 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     @discardableResult
     private func ingest(_ info: LSDeviceInfo, host ip: String, port: Int? = nil, scheme: String? = nil) -> Peer? {
         guard info.fingerprint != fingerprint else { return nil }
-        let peer = Peer(id: info.fingerprint, transportID: id, alias: info.alias, deviceModel: info.deviceModel,
-                        deviceType: info.deviceType, host: ip, port: port ?? info.port ?? Int(LocalSendConstants.port),
-                        scheme: scheme ?? info.protocol ?? "https", lastSeen: Date())
-        stateLock.withLock { knownPeers[peer.id] = peer; missCount[peer.id] = nil }
+        // Requests arriving over AWDL come from link-local IPv6 — not routable later.
+        let linkLocal = ip.lowercased().hasPrefix("fe80")
+        let peer: Peer = stateLock.withLock {
+            let old = knownPeers[info.fingerprint]
+            var p = Peer(id: info.fingerprint, transportID: id, alias: info.alias, deviceModel: info.deviceModel,
+                         deviceType: info.deviceType, host: linkLocal ? (old?.host ?? "") : ip,
+                         port: linkLocal ? (old?.port ?? 0) : (port ?? info.port ?? Int(LocalSendConstants.port)),
+                         scheme: scheme ?? info.protocol ?? "https", lastSeen: Date())
+            p.awdlService = old?.awdlService ?? p2pNames[info.fingerprint]
+            knownPeers[p.id] = p
+            missCount[p.id] = nil
+            return p
+        }
+        if !peer.hasLAN && peer.awdlService == nil { return nil }
         Task { @MainActor [weak self] in self?.host?.transportDidUpdate(peer) }
         return peer
     }
@@ -302,13 +405,29 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
 
     // MARK: Sending
 
+    /// Normal network or direct Wi‑Fi link?
+    enum Route: Sendable { case lan, direct(String) }
+
+    func route(for peer: Peer) async -> Route {
+        let pref = DirectLinkPreference.current
+        guard let svc = stateLock.withLock({ knownPeers[peer.id]?.awdlService ?? peer.awdlService }), pref != .off,
+              config.directLink else { return .lan }
+        if pref == .always || !peer.hasLAN { return .direct(svc) }
+        // Automatic: stay on the shared network when it works (keeps AWDL channel-hopping off).
+        let ok = (try? await client.register(base: peer.baseURL, me: myInfo(announce: nil), probe: true)) != nil
+        return ok ? .lan : .direct(svc)
+    }
+
     func send(_ payload: OutgoingPayload, to peer: Peer, update: @escaping TransferUpdate) async throws {
         let files = try OutgoingFileCollector.collect(payload)
         guard !files.isEmpty else { throw TransferError.nothingToSend }
         update(.waiting, 0)
         let request = LSPrepareUploadRequest(info: myInfo(announce: nil),
                                              files: Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0.dto) }))
-        let result = try await client.prepareUpload(peer: peer, request: request)
+        let route = await route(for: peer)
+        if case .direct = route { NSLog("SwiftDrop: sending to \(peer.alias) over direct Wi‑Fi link") }
+        let channel = Channel(route: route, peer: peer, client: client)
+        let result = try await channel.prepare(request)
         guard case .accepted(let resp) = result else { update(.done, 1); return }
 
         // Largest first, up to 4 uploads in flight: small files ride alongside big ones,
@@ -316,7 +435,6 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         let accepted = files.filter { resp.files[$0.id] != nil }.sorted { $0.size > $1.size }
         let meter = ProgressMeter(total: accepted.reduce(Int64(0)) { $0 + $1.size }, update: update)
         update(.sending, 0)
-        let client = self.client
         do {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 var queue = accepted[...]
@@ -324,8 +442,9 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
                     guard let f = queue.popFirst() else { return }
                     let token = resp.files[f.id]!
                     group.addTask {
-                        try await client.upload(peer: peer, sessionId: resp.sessionId, fileId: f.id,
-                                                token: token, file: f.url) { sent in meter.set(f.id, sent) }
+                        try await channel.upload(sessionId: resp.sessionId, fileId: f.id, token: token, file: f.url) { sent in
+                            meter.set(f.id, sent)
+                        }
                         meter.set(f.id, f.size, force: true)
                     }
                 }
@@ -336,11 +455,54 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
                 }
             }
         } catch {
-            await client.cancel(peer: peer, sessionId: resp.sessionId)
+            await channel.cancel(sessionId: resp.sessionId)
             if error is CancellationError { throw TransferError.cancelled }
             throw error
         }
         update(.done, 1)
+    }
+}
+
+/// The LocalSend calls, over either URLSession (LAN) or the peer-to-peer HTTP client.
+struct Channel: Sendable {
+    let route: LocalSendTransport.Route
+    let peer: Peer
+    let client: LocalSendClient
+
+    private var tls: Bool { peer.scheme == "https" }
+
+    func prepare(_ request: LSPrepareUploadRequest) async throws -> PrepareResult {
+        guard case .direct(let svc) = route else { return try await client.prepareUpload(peer: peer, request: request) }
+        let (code, data): (Int, Data)
+        do {
+            (code, data) = try await P2PHTTP.request(service: svc, tls: tls, method: "POST", path: "/api/localsend/v2/prepare-upload",
+                                                     body: .data(try JSONEncoder().encode(request)), timeout: 600)
+        } catch { throw TransferError.unreachable(error.localizedDescription) }
+        switch code {
+        case 200: return .accepted(try JSONDecoder().decode(LSPrepareUploadResponse.self, from: data))
+        case 204: return .nothingToTransfer
+        case 401: throw TransferError.pinRequired
+        case 403: throw TransferError.declined
+        case 409, 429: throw TransferError.busy
+        default: throw TransferError.server(code)
+        }
+    }
+
+    func upload(sessionId: String, fileId: String, token: String, file: URL, progress: @escaping (Int64) -> Void) async throws {
+        guard case .direct(let svc) = route else {
+            return try await client.upload(peer: peer, sessionId: sessionId, fileId: fileId, token: token, file: file, progress: progress)
+        }
+        let (code, _) = try await P2PHTTP.request(service: svc, tls: tls, method: "POST", path: "/api/localsend/v2/upload",
+                                                  query: ["sessionId": sessionId, "fileId": fileId, "token": token],
+                                                  body: .file(file), contentType: "application/octet-stream", timeout: 120,
+                                                  progress: progress)
+        if code != 200 { throw TransferError.server(code) }
+    }
+
+    func cancel(sessionId: String) async {
+        guard case .direct(let svc) = route else { return await client.cancel(peer: peer, sessionId: sessionId) }
+        _ = try? await P2PHTTP.request(service: svc, tls: tls, method: "POST", path: "/api/localsend/v2/cancel",
+                                       query: ["sessionId": sessionId], timeout: 4)
     }
 }
 
@@ -394,6 +556,21 @@ struct LocalSendConfig {
     var tls: (identity: SecIdentity, fingerprint: String)?
     /// Run multicast discovery (iOS needs a special entitlement; falls back to HTTP scan).
     var multicast = true
+    /// Bluetooth LE discovery (advertise + scan).
+    var bluetooth = true
+    /// Apple peer-to-peer Wi‑Fi (AWDL) link + Bonjour.
+    var directLink = true
+    /// Advertise ourselves (false for send-only share extensions).
+    var advertise = true
+}
+
+/// When to use the direct Wi‑Fi link: "auto" (only if the normal network can't reach the
+/// device), "always", or "off". Stored in UserDefaults key `directLink`.
+enum DirectLinkPreference: String, CaseIterable, Identifiable {
+    case auto, always, off
+    var id: String { rawValue }
+    var title: String { switch self { case .auto: "Automatic"; case .always: "Always"; case .off: "Off" } }
+    static var current: DirectLinkPreference { DirectLinkPreference(rawValue: UserDefaults.standard.string(forKey: "directLink") ?? "") ?? .auto }
 }
 
 // MARK: - Receive sessions

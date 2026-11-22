@@ -114,8 +114,14 @@ struct HomeView: View {
                     }
                 }
 
-                Section("Name") {
+                Section {
                     TextField("Device name", text: $model.deviceName)
+                    Picker("Direct Wi‑Fi link", selection: Binding(get: { DirectLinkPreference.current },
+                                                                  set: { UserDefaults.standard.set($0.rawValue, forKey: "directLink") })) {
+                        ForEach(DirectLinkPreference.allCases) { Text($0.title).tag($0) }
+                    }
+                } header: { Text("This iPhone") } footer: {
+                    Text("Direct Wi‑Fi link connects straight to nearby Macs and iPhones, like AirDrop, without leaving your network. Bluetooth helps find devices.")
                 }
             }
             .navigationTitle("SwiftDrop")

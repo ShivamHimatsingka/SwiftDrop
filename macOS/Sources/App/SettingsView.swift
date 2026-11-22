@@ -22,6 +22,9 @@ struct SettingsView: View {
             }
             Section {
                 Toggle("Encryption (HTTPS)", isOn: $model.useEncryption)
+                Picker("Direct Wi‑Fi link", selection: $model.directLink) {
+                    ForEach(DirectLinkPreference.allCases) { Text($0.title).tag($0) }
+                }
                 LabeledContent("Protocol", value: "LocalSend v\(LocalSendConstants.protocolVersion) · port \(LocalSendConstants.port)")
                 if let fp = model.localSend?.fingerprint {
                     LabeledContent("Fingerprint") {
@@ -29,7 +32,7 @@ struct SettingsView: View {
                     }
                 }
             } header: { Text("Network") } footer: {
-                Text("Keep encryption on unless the other device has it disabled in LocalSend settings.")
+                Text("Direct Wi‑Fi link connects straight to nearby iPhones, iPads and Macs (like AirDrop) without leaving your network. Automatic uses it only when the normal network can't reach the device. Bluetooth is used to find devices.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Favorites") {

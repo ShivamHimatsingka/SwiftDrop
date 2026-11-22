@@ -14,7 +14,8 @@ final class HTTPServer: @unchecked Sendable {
 
     init(handler: @escaping Handler) { self.handler = handler }
 
-    func start(port: UInt16, tlsIdentity: SecIdentity?, loopbackOnly: Bool = false) throws {
+    func start(port: UInt16, tlsIdentity: SecIdentity?, loopbackOnly: Bool = false,
+               peerToPeer: Bool = false, service: NWListener.Service? = nil) throws {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.enableKeepalive = true
@@ -34,6 +35,7 @@ final class HTTPServer: @unchecked Sendable {
             params = NWParameters(tls: nil, tcp: tcp)
         }
         params.allowLocalEndpointReuse = true
+        params.includePeerToPeer = peerToPeer    // accept connections over AWDL too
         let nwPort = NWEndpoint.Port(rawValue: port)!
         let l: NWListener
         if loopbackOnly {
@@ -43,6 +45,7 @@ final class HTTPServer: @unchecked Sendable {
         } else {
             l = try NWListener(using: params, on: nwPort)
         }
+        l.service = service
         l.newConnectionHandler = { [weak self] conn in
             guard let self else { conn.cancel(); return }
             HTTPConnection(conn, queue: self.queue, handler: self.handler).start()
@@ -55,6 +58,9 @@ final class HTTPServer: @unchecked Sendable {
         listener = l
         l.start(queue: queue)
     }
+
+    /// Show/hide the Bonjour (and peer-to-peer) advertisement, e.g. when receiving is turned off.
+    func setService(_ service: NWListener.Service?) { listener?.service = service }
 
     func stop() {
         listener?.cancel()

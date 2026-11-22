@@ -40,8 +40,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>SwiftDrop uses Bluetooth to find nearby devices, even when you're not on the same Wi‑Fi.</string>
 	<key>NSBonjourServices</key>
-	<array/>
+	<array>
+		<string>_swiftdrop._tcp</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>SwiftDrop finds nearby phones and computers on your Wi‑Fi to share files.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
