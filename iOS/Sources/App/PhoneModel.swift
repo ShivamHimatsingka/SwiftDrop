@@ -228,6 +228,7 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     private func finish(_ id: String, _ phase: TransferPhase, _ msg: String?, payload: OutgoingPayload, peer: Peer) {
         guard var t = transfers[id] else { return }
+        if phase != .done { NSLog("SwiftDrop: send to \(peer.alias) ended \(phase.rawValue): \(msg ?? "")") }
         t.phase = phase; t.message = msg
         if phase == .done {
             t.progress = 1
@@ -244,7 +245,7 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     /// Automation hook for Shortcuts:
     ///   swiftdrop://send?to=<device name or id>&text=<message>&file=<path>&file=<path>
-    /// Waits up to 10 s for the device to be discovered.
+    /// Waits up to 30 s for the device to be discovered.
     func handle(_ url: URL) {
         guard url.scheme == "swiftdrop", url.host == "send",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
@@ -253,10 +254,12 @@ final class PhoneModel: ObservableObject, TransportHost {
                                       texts: items.filter { $0.name == "text" }.compactMap(\.value))
         refresh(deep: false)
         Task {
-            for _ in 0..<40 {
+            for i in 0..<120 {
                 if let p = peers.first(where: { $0.id == to || $0.alias.localizedCaseInsensitiveCompare(to) == .orderedSame }) {
+                    NSLog("SwiftDrop: found \(p.alias) after \(i * 250) ms (LAN: \(p.hasLAN), direct: \(p.awdlService != nil))")
                     send(payload, to: p.id); return
                 }
+                if i % 20 == 19 { refresh(deep: false) }
                 try? await Task.sleep(for: .milliseconds(250))
             }
             statusMessage = "“\(to)” isn’t nearby"

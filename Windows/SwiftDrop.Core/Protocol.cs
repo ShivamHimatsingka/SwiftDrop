@@ -100,3 +100,18 @@ public record Incoming(string Id, string SenderId, string SenderAlias, string? S
 }
 
 public record HistoryEntry(bool Sent, string Title, string Device, DateTime Time, string? Path);
+
+/// Card exchanged over Bluetooth LE (same JSON as the Mac/iPhone/Android apps).
+public record BleCard(
+    [property: System.Text.Json.Serialization.JsonPropertyName("a")] string Alias,
+    [property: System.Text.Json.Serialization.JsonPropertyName("f")] string Fingerprint,
+    [property: System.Text.Json.Serialization.JsonPropertyName("m")] string? Model,
+    [property: System.Text.Json.Serialization.JsonPropertyName("t")] string? Type,
+    [property: System.Text.Json.Serialization.JsonPropertyName("p")] int Port,
+    [property: System.Text.Json.Serialization.JsonPropertyName("s")] string Scheme,
+    [property: System.Text.Json.Serialization.JsonPropertyName("ip")] List<string> Ips,
+    [property: System.Text.Json.Serialization.JsonPropertyName("x")] List<string> Caps)
+{
+    public static readonly Guid Service = Guid.Parse("7A4F0001-5D3F-4B6E-9C2A-53574946544F");
+    public static readonly Guid Info = Guid.Parse("7A4F0002-5D3F-4B6E-9C2A-53574946544F");
+}

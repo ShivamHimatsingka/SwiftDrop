@@ -67,6 +67,24 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
 
 ---
 
+## Bluetooth discovery and direct Wi‑Fi links
+
+Every app advertises a small SwiftDrop Bluetooth LE "card" (name, model, IP addresses, port) and reads
+other devices' cards. That finds devices even on networks that block discovery, such as guest or office Wi‑Fi.
+When two devices aren't on the same network, SwiftDrop can make its own Wi‑Fi link between them,
+**without ever switching either device off its current Wi‑Fi**:
+
+| Between | Direct link | Notes |
+|---|---|---|
+| Mac ↔ iPhone/iPad, Mac ↔ Mac, iPhone ↔ iPhone | Apple peer-to-peer Wi‑Fi (AWDL, the link AirDrop uses) | No prompts; internet stays connected |
+| Android ↔ Android | Wi‑Fi Direct (set up over Bluetooth) | Receiver only opens a group for senders it would accept |
+| Windows ↔ anything, Android ↔ Apple | Bluetooth discovery only | These need a shared network: Apple doesn't support Wi‑Fi Direct, and Windows needs pairing dialogs |
+
+**Settings ▸ Direct Wi‑Fi link** (Mac and iPhone): *Automatic* (default) uses the direct link only when the
+normal network can't reach the device. *Always* prefers it, and *Off* disables it.
+On the same good Wi‑Fi network a direct link usually isn't faster. It helps when there's no shared network,
+the router is slow or busy, or the network blocks device-to-device traffic.
+
 ## Platform notes (honest limits)
 
 - **iOS can't receive in the background.** Only Apple's AirDrop may listen for transfers when the app
@@ -74,9 +92,10 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
   ~30 s after you leave it. Sending through the Share sheet works any time.
 - **"No app" on Android** is as close as Android allows: there's no screen to open, but Android
   requires a (minimised, silent) notification for any background service.
-- **Discovery** uses LocalSend's multicast announcements, with an automatic subnet scan as a fallback
-  for networks that block multicast (some guest/enterprise Wi-Fi). Devices must be on the same network.
-  SwiftDrop doesn't create its own Wi-Fi link the way AirDrop does.
+- **Discovery** uses LocalSend's multicast announcements, Bluetooth LE, Bonjour, and a subnet scan as a last resort.
+  Plain LocalSend apps (without SwiftDrop) are only found over Wi‑Fi.
+- **iPhone Bluetooth** advertising only runs while SwiftDrop is open (an iOS limit).
+- **Wi‑Fi Direct** credentials travel over Bluetooth LE without pairing. The transfer itself is still TLS-encrypted.
 - **Windows' built-in Nearby Sharing and Android's Quick Share** use proprietary protocols. See
   [docs/NativeReceiving.md](docs/NativeReceiving.md) for the plan to add Quick Share so stock Android phones
   can receive with nothing installed.

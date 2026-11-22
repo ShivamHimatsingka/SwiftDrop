@@ -159,7 +159,26 @@ public sealed class Engine
             catch { }
     }
 
-    public void Announce() { if (IsDiscoverable(null)) SendMulticast(Me(true)); }
+    public void Announce() { if (IsDiscoverable(null)) SendMulticast(Me(true)); BluetoothChanged?.Invoke(); }
+
+    // ------------------------------------------------------------ Bluetooth
+
+    /// Raised when visibility changes so the platform Bluetooth layer can start/stop advertising.
+    public event Action? BluetoothChanged;
+
+    /// Our Bluetooth card, or null when we shouldn't be discoverable.
+    public BleCard? Card() => IsDiscoverable(null)
+        ? new BleCard(Settings.Name, Fingerprint, DeviceModel, "desktop", Port, Scheme, LocalIPv4().Select(a => a.ToString()).ToList(), new())
+        : null;
+
+    /// A card read over Bluetooth: connect over the normal network if possible.
+    public async Task HandleCard(BleCard card)
+    {
+        if (card.Fingerprint == Fingerprint || _peers.ContainsKey(card.Fingerprint)) return;
+        foreach (var ip in card.Ips)
+            foreach (var scheme in new[] { card.Scheme, card.Scheme == "https" ? "http" : "https" })
+                if (await Register($"{scheme}://{ip}:{card.Port}", probe: true) is { } info) { Ingest(info, ip, card.Port, scheme); return; }
+    }
 
     /// Call while a sending UI is visible.
     public void Refresh(bool deep = false)
@@ -246,7 +265,7 @@ public sealed class Engine
     };
     bool CanReceive(string id) => Settings.Mode switch { ReceiveMode.Everyone => true, ReceiveMode.Favorites => IsFavorite(id), _ => false };
 
-    public void SetMode(ReceiveMode m) { Settings.Mode = m; Save(); if (m != ReceiveMode.Off) Announce(); Changed?.Invoke(); }
+    public void SetMode(ReceiveMode m) { Settings.Mode = m; Save(); Announce(); Changed?.Invoke(); }
     public void SetFavorite(string id, bool? autoAccept)
     {
         if (autoAccept is null) Settings.Favorites.Remove(id); else Settings.Favorites[id] = autoAccept.Value;
