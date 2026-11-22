@@ -182,8 +182,19 @@ enum P2PHTTP {
     private static func readResponse(_ conn: NWConnection, timeout: TimeInterval) async throws -> (Int, Data) {
         var buf = Data()
         let sep = Data("\r\n\r\n".utf8)
+        // A locked iPhone can accept the connection yet never answer: give up after `timeout`.
+        let timedOut = OnceFlag()
+        let watchdog = DispatchWorkItem { timedOut.run {}; conn.cancel() }
+        let fired = { var f = true; timedOut.run { f = false }; return f }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        defer { watchdog.cancel() }
         while buf.range(of: sep) == nil {
-            let (d, done) = try await receive(conn)
+            let received: (Data?, Bool)
+            do { received = try await receive(conn) } catch {
+                if fired() { throw TransferError.unreachable("No reply over the direct link") }
+                throw error
+            }
+            let (d, done) = received
             if let d { buf.append(d) }
             if done && buf.range(of: sep) == nil { throw TransferError.unreachable("Connection closed") }
         }
