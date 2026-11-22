@@ -13,13 +13,17 @@ enum TLSIdentityStore {
     /// Readable while the phone is locked (after the first unlock since boot), so a background
     /// relaunch for a Bluetooth knock can still use our identity.
     private static let accessible = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    /// Keychain group shared by the app and its Share extension (one identity for both).
+    private static let group = Bundle.main.object(forInfoDictionaryKey: "SwiftDropKeychainGroup") as? String
 
     /// Our long-lived identity. Returns nil only if the Keychain can't be read right now
     /// (phone restarted and not unlocked yet). In that case nothing is created or deleted,
     /// so the identity — and how other devices know this iPhone — never changes.
     static func loadOrCreate() -> (identity: SecIdentity, fingerprint: String)? {
-        let q: [String: Any] = [kSecClass as String: kSecClassIdentity, kSecAttrLabel as String: label,
+        moveIntoSharedGroup()
+        var q: [String: Any] = [kSecClass as String: kSecClassIdentity, kSecAttrLabel as String: label,
                                 kSecReturnRef as String: true]
+        if let group { q[kSecAttrAccessGroup as String] = group }
         var out: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &out)
         switch status {
@@ -37,6 +41,15 @@ enum TLSIdentityStore {
             SDLog.log("TLS identity not readable yet (status \(status)); waiting for unlock")
             return nil
         }
+    }
+
+    /// Builds before 1.7 kept the identity in the app's private group; move it (same identity,
+    /// same fingerprint) into the shared group so the Share extension can use it too.
+    private static func moveIntoSharedGroup() {
+        guard let group else { return }
+        let to = [kSecAttrAccessGroup as String: group] as CFDictionary
+        SecItemUpdate([kSecClass as String: kSecClassKey, kSecAttrApplicationTag as String: keyTag] as CFDictionary, to)
+        SecItemUpdate([kSecClass as String: kSecClassCertificate, kSecAttrLabel as String: label] as CFDictionary, to)
     }
 
     /// Identities created by older builds were "when unlocked" only.
@@ -73,7 +86,8 @@ enum TLSIdentityStore {
             kSecPrivateKeyAttrs as String: [kSecAttrIsPermanent as String: true,
                                             kSecAttrApplicationTag as String: keyTag,
                                             kSecAttrLabel as String: label,
-                                            kSecAttrAccessible as String: accessible],
+                                            kSecAttrAccessible as String: accessible]
+                                            .merging(group.map { [kSecAttrAccessGroup as String: $0] } ?? [:]) { a, _ in a },
         ]
         var err: Unmanaged<CFError>?
         guard let priv = SecKeyCreateRandomKey(attrs as CFDictionary, &err),
@@ -86,8 +100,9 @@ enum TLSIdentityStore {
         }
         let certDER = DER.seq([tbs, DER.ecdsaSHA256, DER.bitString(sig)])
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else { return nil }
-        let add: [String: Any] = [kSecClass as String: kSecClassCertificate, kSecValueRef as String: cert,
+        var add: [String: Any] = [kSecClass as String: kSecClassCertificate, kSecValueRef as String: cert,
                                   kSecAttrLabel as String: label, kSecAttrAccessible as String: accessible]
+        if let group { add[kSecAttrAccessGroup as String] = group }
         let st = SecItemAdd(add as CFDictionary, nil)
         guard st == errSecSuccess || st == errSecDuplicateItem else { return nil }
         return existing()

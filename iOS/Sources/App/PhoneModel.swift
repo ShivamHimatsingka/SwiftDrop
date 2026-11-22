@@ -33,6 +33,8 @@ final class PhoneModel: ObservableObject, TransportHost {
     private var consent: [String: Date] = [:]
     /// Senders the user declined from the notification.
     private var declined: [String: Date] = [:]
+    /// Senders who knocked recently (their notification may be being tapped right now).
+    private var knockedAt: [String: Date] = [:]
     private let notifications = NotificationHandler()
 
     private init() {
@@ -108,6 +110,8 @@ final class PhoneModel: ObservableObject, TransportHost {
         transport?.refresh(deep: deep)
     }
 
+    func checkPeers() { transport?.checkPeers() }
+
     func didBecomeActive() {
         if statusMessage?.contains("Port") == true { statusMessage = nil }
         if wasBackgrounded { wasBackgrounded = false; transport?.resumeAfterBackground() } else { refresh() }
@@ -119,6 +123,16 @@ final class PhoneModel: ObservableObject, TransportHost {
             SDLog.log("knock ignored: receiving is \(receiveMode.rawValue) and \(k.a) isn't allowed"); return
         }
         if UIApplication.shared.applicationState == .active { refresh(); return }   // already listening
+        knockedAt[k.f] = Date()
+        // Your own devices (favourite + auto-accept): like AirDrop between your devices — no
+        // interaction. Reopen the listener in the background; the file arrives, then "Received".
+        if favorites.first(where: { $0.id == k.f })?.autoAccept == true {
+            SDLog.log("knock from auto-accept favourite \(k.a): receiving in background")
+            consent[k.f] = Date().addingTimeInterval(120)
+            beginBackgroundReceive()
+            transport?.resumeAfterBackground()
+            return
+        }
         notify(id: "knock-\(k.f)", body: "“\(k.a)” would like to share \(k.n).", fingerprint: k.f, incoming: true)
     }
 
@@ -220,6 +234,15 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     func transportShouldAccept(_ offer: IncomingOffer) async -> IncomingDecision {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["knock-\(offer.senderID)"])
+        // Tapping the notification wakes the app, and the sender's request can arrive a moment
+        // before iOS tells us which button was pressed. Give that answer up to 3 s to land.
+        if let knocked = knockedAt[offer.senderID], Date().timeIntervalSince(knocked) < 150,
+           consent[offer.senderID] == nil, declined[offer.senderID] == nil {
+            for _ in 0..<30 where consent[offer.senderID] == nil && declined[offer.senderID] == nil {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        knockedAt[offer.senderID] = nil
         if let until = declined.removeValue(forKey: offer.senderID), until > Date() { return .decline }
         if let until = consent.removeValue(forKey: offer.senderID), until > Date() {   // Accept pressed / notification tapped
             let state = IncomingState(offer: offer)
@@ -391,6 +414,13 @@ final class PhoneModel: ObservableObject, TransportHost {
             }
             statusMessage = "“\(to)” isn’t nearby"
         }
+    }
+
+    /// Auto-accept implies favourite (a Mac/PC you own can then send to the locked iPhone silently).
+    func setAutoAccept(_ peer: Peer, _ on: Bool) {
+        favorites.removeAll { $0.id == peer.id }
+        if on || isFavorite(peer.id) == false && on { favorites.append(Favorite(id: peer.id, alias: peer.alias, autoAccept: true)) }
+        else if !on { favorites.append(Favorite(id: peer.id, alias: peer.alias, autoAccept: false)) }
     }
 
     func toggleFavorite(_ peer: Peer) {

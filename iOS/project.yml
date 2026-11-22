@@ -28,6 +28,7 @@ targets:
         CFBundleDisplayName: SwiftDrop
         UILaunchScreen: {}
         UIFileSharingEnabled: true
+        SwiftDropKeychainGroup: $(AppIdentifierPrefix)$(SWIFTDROP_BUNDLE_PREFIX).swiftdrop
         UIBackgroundModes: [bluetooth-peripheral]
         LSSupportsOpeningDocumentsInPlace: true
         NSLocalNetworkUsageDescription: SwiftDrop finds nearby phones and computers on your Wi‑Fi to share files.
@@ -44,6 +45,7 @@ targets:
         # Paid Apple Developer accounts: uncomment for Time Sensitive notifications (light up the
         # screen and break through Focus). Free accounts can't sign this entitlement.
         # CODE_SIGN_ENTITLEMENTS: Resources/SwiftDrop.entitlements
+        CODE_SIGN_ENTITLEMENTS: Resources/Shared.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
@@ -53,6 +55,7 @@ targets:
     platform: iOS
     sources:
       - Sources/Share
+      - Sources/App/TLSIdentityIOS.swift
       - path: ../Core/Swift
         group: Core
     info:
@@ -63,6 +66,7 @@ targets:
         NSBonjourServices: [_swiftdrop._tcp]
         NSBluetoothAlwaysUsageDescription: SwiftDrop uses Bluetooth to find nearby devices, even when you're not on the same Wi‑Fi.
         NSAppTransportSecurity: { NSAllowsLocalNetworking: true, NSAllowsArbitraryLoads: true }
+        SwiftDropKeychainGroup: $(AppIdentifierPrefix)$(SWIFTDROP_BUNDLE_PREFIX).swiftdrop
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: ShareViewController
@@ -71,4 +75,5 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(SWIFTDROP_BUNDLE_PREFIX).ios.share
+        CODE_SIGN_ENTITLEMENTS: Resources/Shared.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"

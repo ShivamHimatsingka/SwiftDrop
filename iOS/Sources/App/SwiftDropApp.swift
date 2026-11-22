@@ -88,6 +88,10 @@ struct HomeView: View {
                                     .contextMenu {
                                         Button(model.isFavorite(peer.id) ? "Remove from Favorites" : "Add to Favorites",
                                                systemImage: "star") { model.toggleFavorite(peer) }
+                                        // Your own devices: receive even while locked, with no tap.
+                                        Toggle("Auto-Accept from This Device", systemImage: "checkmark.circle",
+                                               isOn: Binding(get: { model.favorites.first { $0.id == peer.id }?.autoAccept ?? false },
+                                                             set: { model.setAutoAccept(peer, $0) }))
                                         if t?.phase.isActive == true {
                                             Button("Stop Sending", systemImage: "xmark", role: .destructive) { model.cancel(peerID: peer.id) }
                                         }
@@ -135,6 +139,9 @@ struct HomeView: View {
                 }
             }
             .navigationTitle("SwiftDrop")
+            .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+                if UIApplication.shared.applicationState == .active { model.checkPeers() }   // live list; drops stale devices
+            }
             .refreshable { model.refresh(deep: true) }
             .confirmationDialog("Send to \(target?.alias ?? "")", isPresented: Binding(get: { target != nil && !showPhotos && !showFiles },
                                                                                 set: { if !$0 && !showPhotos && !showFiles { target = nil } }),

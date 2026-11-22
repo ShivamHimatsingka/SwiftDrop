@@ -50,6 +50,8 @@
 	<string>SwiftDrop finds nearby phones and computers on your Wi‑Fi to share files.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>SwiftDrop saves photos and videos you receive to your library.</string>
+	<key>SwiftDropKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)$(SWIFTDROP_BUNDLE_PREFIX).swiftdrop</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-peripheral</string>

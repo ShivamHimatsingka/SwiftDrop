@@ -27,6 +27,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     private var p2pNames: [String: String] = [:]          // fingerprint -> Bonjour service name
     private var visibleCache = true                        // read off the main actor (BLE queue)
     private var bleSeen: [String: Date] = [:]              // fingerprint -> last Bluetooth card
+    private var loggedPeers: Set<String> = []
     private var wakeable: Set<String> = []                 // peers that accept Bluetooth wake-ups (iPhone)
     /// Receiving side: someone knocked over Bluetooth (iOS shows a "Tap to receive" notification).
     var onWake: (@Sendable (BLEWake) -> Void)?
@@ -83,11 +84,11 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         server.onFailure = { [weak host] msg in Task { @MainActor in host?.transportDidFail(msg) } }
         visibleCache = host.isDiscoverable(by: nil)
         let p2p = config.directLink && DirectLinkPreference.current != .off
-        do { try server.start(port: config.port, tlsIdentity: tlsIdentity, peerToPeer: p2p,
+        if config.serve { do { try server.start(port: config.port, tlsIdentity: tlsIdentity, peerToPeer: p2p,
                               service: p2p && config.advertise && visibleCache ? bonjourService() : nil) } catch {
             host.transportDidFail("Could not listen on port \(config.port). Is LocalSend already running on this device?")
         }
-        self.server = server
+        self.server = server }
 
         if config.bluetooth {
             ble.card = { [weak self] in self?.bleCard() }
@@ -268,15 +269,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             await self.revalidate(reveal: reveal)
             let shouldScan = deep || self.stateLock.withLock { self.knownPeers.isEmpty }
             if shouldScan { await self.scanSubnets(me: self.myInfo(announce: nil), reveal: reveal) }
-            // Sleeping iPhones must show up on Bluetooth during this refresh; if not, they were
-            // closed (swiped away) or left — remove them.
-            try? await Task.sleep(for: .seconds(25))
-            let gone: [String] = self.stateLock.withLock {
-                let ids = self.knownPeers.values.filter { $0.asleep && (self.bleSeen[$0.id] ?? .distantPast) < started }.map(\.id)
-                ids.forEach { self.knownPeers[$0] = nil }
-                return ids
-            }
-            if !gone.isEmpty { await MainActor.run { gone.forEach { self.host?.transportDidLose($0) } } }
+            _ = started
         }
     }
 
@@ -316,7 +309,10 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             if missCount[peerID]! >= 2 {
                 missCount[peerID] = nil
                 // Paused iPhone: still advertising over Bluetooth, so keep it listed (we can wake it).
-                if let seen = bleSeen[peerID], Date().timeIntervalSince(seen) < 600, wakeable.contains(peerID) {
+                // A locked iPhone is invisible on Bluetooth to Macs/PCs, so keep it listed as "Asleep"
+                // for up to 30 min after we last heard from it (Wi‑Fi or Bluetooth).
+                let lastHeard = max(bleSeen[peerID] ?? .distantPast, knownPeers[peerID]?.lastSeen ?? .distantPast)
+                if wakeable.contains(peerID), Date().timeIntervalSince(lastHeard) < 1800 {
                     if var p = knownPeers[peerID], !p.asleep {
                         p.asleep = true; knownPeers[peerID] = p
                         Task { @MainActor [weak self] in self?.host?.transportDidUpdate(p) }
@@ -377,6 +373,10 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         } : []
         if !stale.isEmpty { Task { @MainActor [weak self] in stale.forEach { self?.host?.transportDidLose($0) } } }
         if !peer.hasLAN && peer.awdlService == nil { return nil }
+        if stateLock.withLock({ !loggedPeers.contains(peer.id) }) {
+            stateLock.withLock { _ = loggedPeers.insert(peer.id) }
+            SDLog.log("device \(peer.alias) (\(peer.deviceModel ?? "?"), id \(peer.id.prefix(8))) at \(peer.host):\(peer.port)")
+        }
         Task { @MainActor [weak self] in self?.host?.transportDidUpdate(peer) }
         return peer
     }
@@ -529,7 +529,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             }
         }
         guard stateLock.withLock({ wakeable.contains(peer.id) }), ble.canWake(peer.id) else {
-            throw TransferError.unreachable("\(peer.alias) isn’t answering — open SwiftDrop on it and try again")
+            throw TransferError.unreachable("\(peer.alias) is locked — open SwiftDrop on it, then send again")
         }
         let knock = BLEWake(a: alias, f: fingerprint, n: payload.summary)
         SDLog.log("\(peer.alias) isn't answering — knocking over Bluetooth")
@@ -540,7 +540,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             if ble.canWake(peer.id) { delivered = await ble.wake(peer.id, knock) }
         }
         guard delivered else {
-            throw TransferError.unreachable("\(peer.alias) isn’t answering — open SwiftDrop on it and try again")
+            throw TransferError.unreachable("\(peer.alias) is locked — open SwiftDrop on it, then send again")
         }
         let deadline = Date().addingTimeInterval(120)
         while Date() < deadline {
@@ -548,7 +548,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             try await Task.sleep(for: .seconds(1.5))
             if await reachable(peer) { SDLog.log("\(peer.alias) is awake"); return }
         }
-        throw TransferError.unreachable("\(peer.alias) didn’t open SwiftDrop")
+        throw TransferError.unreachable("\(peer.alias) didn’t answer — open SwiftDrop on it, then send again")
     }
 
     private func reachable(_ peer: Peer) async -> Bool {
@@ -591,8 +591,16 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         let route = await route(for: peer)
         SDLog.log("route to \(peer.alias): \(route) (awdl seen: \(peer.awdlService.flatMap { P2PBrowser.interfaces.get($0)?.name } ?? "no"))")
         if case .direct = route { SDLog.log("sending to \(peer.alias) over direct Wi‑Fi link") }
-        let channel = Channel(route: route, peer: peer, client: client)
-        let result = try await channel.prepare(request)
+        var channel = Channel(route: route, peer: peer, client: client)
+        let result: PrepareResult
+        do {
+            result = try await channel.prepare(request)
+        } catch TransferError.unreachable(let why) where { if case .direct = route { return true }; return false }() && peer.hasLAN {
+            // The direct link couldn't be set up (busy, blocked, unsupported): carry on over Wi‑Fi.
+            SDLog.log("direct link to \(peer.alias) failed (\(why)); falling back to Wi‑Fi")
+            channel = Channel(route: .lan, peer: peer, client: client)
+            result = try await channel.prepare(request)
+        }
         guard case .accepted(let resp) = result else { update(.done, 1); return }
 
         // Largest first, up to 4 uploads in flight: small files ride alongside big ones,
@@ -732,6 +740,9 @@ struct LocalSendConfig {
     var advertise = true
     /// Accept Bluetooth wake-up knocks (iOS, where the app is paused in the background).
     var wakeable = false
+    /// Run the receiving server. Send-only hosts (the iOS Share extension) set this to false
+    /// and still report the app's port, so receivers keep reaching the app.
+    var serve = true
 }
 
 /// When to use the direct Wi‑Fi link: "auto" (whenever the device is reachable over it, else

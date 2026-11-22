@@ -69,6 +69,30 @@ object Engine {
     @Volatile private var started = false
     @Volatile private var browsingUntil = 0L
     private val misses = ConcurrentHashMap<String, Int>()
+
+    // Keep the CPU and Wi‑Fi awake only while a transfer runs (screen-off / Doze safe).
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private val busyCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun transferStarted() {
+        if (busyCount.incrementAndGet() != 1) return
+        runCatching {
+            wakeLock = (app.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+                .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "SwiftDrop:transfer").apply { acquire(60 * 60_000L) }
+            @Suppress("DEPRECATION")
+            wifiLock = (app.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+                .createWifiLock(if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_HIGH_PERF else WifiManager.WIFI_MODE_FULL, "SwiftDrop:transfer")
+                .apply { setReferenceCounted(false); acquire() }
+        }
+    }
+
+    private fun transferEnded() {
+        if (busyCount.decrementAndGet() > 0) return
+        busyCount.set(0)
+        runCatching { wakeLock?.takeIf { it.isHeld }?.release(); wifiLock?.takeIf { it.isHeld }?.release() }
+        wakeLock = null; wifiLock = null
+    }
     private var ble: Ble? = null
     /** iPhones that accept Bluetooth knocks: fingerprint -> (Bluetooth address, last seen). */
     private val wakeable = ConcurrentHashMap<String, Pair<String, Long>>()
@@ -279,7 +303,7 @@ object Engine {
         }
         // Evict abandoned sessions (idle 45 s) or an older one from the same sender.
         sessions.values.filter { it.offer.senderId == info.fingerprint || System.currentTimeMillis() - it.lastActivity > 45_000 }
-            .forEach { sessions.remove(it.offer.id); it.cancelled = true }
+            .forEach { if (sessions.remove(it.offer.id) != null) transferEnded(); it.cancelled = true }
         if (sessions.isNotEmpty() || incoming.value?.state == Incoming.State.ASKING) return Response(409, """{"message":"Busy"}""")
 
         val free = runCatching { android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path).availableBytes }.getOrDefault(Long.MAX_VALUE)
@@ -297,6 +321,7 @@ object Engine {
         if (current.alwaysAccept) setFavorite(info.fingerprint, true)
         val s = Session(current.copy(state = Incoming.State.RECEIVING), files.associate { it.id to UUID.randomUUID().toString() })
         sessions[offer.id] = s
+        transferStarted()
         setIncoming(s.offer)
         if (auto) onIncoming?.invoke(s.offer)
         return Response.json(JSONObject().put("sessionId", offer.id).put("files", JSONObject(s.tokens as Map<*, *>)))
@@ -344,6 +369,7 @@ object Engine {
     }
 
     private fun finishIncoming(s: Session, error: String?) {
+        transferEnded()
         val done = s.offer.copy(state = if (error == null) Incoming.State.DONE else Incoming.State.FAILED,
             progress = 1f, saved = s.saved.toList(), error = error)
         setIncoming(done)
@@ -359,10 +385,12 @@ object Engine {
         if (items.isEmpty() || transfers.value[peer.id]?.first?.active == true) return
         setPhase(peer.id, Phase.WAITING, 0f)
         sendTasks[peer.id] = io.submit {
+            transferStarted()
             val phase = try { doSend(peer, items); Phase.DONE }
             catch (e: TransferException) { android.util.Log.w("SwiftDrop", "send to ${peer.alias}: ${e.message}"); e.kind }
             catch (e: InterruptedException) { Phase.CANCELLED }
             catch (e: Exception) { android.util.Log.w("SwiftDrop", "send to ${peer.alias} failed", e); Phase.FAILED }
+            transferEnded()
             setPhase(peer.id, phase, if (phase == Phase.DONE) 1f else 0f, force = true)
             if (phase == Phase.DONE) addHistory(HistoryEntry(true,
                 if (items.size == 1) items[0].name.substringAfterLast('/') else "${items.size} items", peer.alias, System.currentTimeMillis(), null))

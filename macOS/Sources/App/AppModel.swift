@@ -266,6 +266,10 @@ final class AppModel: ObservableObject, TransportHost {
                                 payload: OutgoingPayload? = nil, peer: Peer? = nil) {
         guard var t = transfers[id] else { return }
         if phase != .done { SDLog.log("transfer to \(peer?.alias ?? t.peerID) ended \(phase.rawValue): \(message ?? "-")") }
+        if let message, message.contains("open SwiftDrop on it") {
+            statusMessage = message.replacingOccurrences(of: "Unreachable: ", with: "")
+            NSSound(named: "Funk")?.play()
+        }
         t.phase = phase
         t.message = message
         if phase == .done { t.progress = 1 }

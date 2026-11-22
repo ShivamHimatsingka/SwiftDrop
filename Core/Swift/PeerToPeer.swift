@@ -129,8 +129,8 @@ enum P2PHTTP {
                 }
             }
             conn.start(queue: queue)
-            // First contact resolves Bonjour and may bring up AWDL: allow time for both.
-            queue.asyncAfter(deadline: .now() + min(timeout, 30)) { once.run { c.resume(throwing: TransferError.unreachable("Direct link timed out")) } }
+            // Connecting (Bonjour resolve + bringing up AWDL) gets 10 s; the caller falls back to Wi‑Fi.
+            queue.asyncAfter(deadline: .now() + min(timeout, 10)) { once.run { c.resume(throwing: TransferError.unreachable("Direct link timed out")) } }
         }
 
         var target = path

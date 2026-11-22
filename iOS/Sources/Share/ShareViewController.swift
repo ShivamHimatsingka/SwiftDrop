@@ -44,8 +44,10 @@ final class ShareModel: ObservableObject, TransportHost {
     var saveDirectory: URL { FileManager.default.temporaryDirectory }
 
     func start() {
-        let cfg = LocalSendConfig(port: 53318, deviceModel: UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
-                                  deviceType: "mobile", tls: nil, advertise: false)
+        // Same identity and port as the SwiftDrop app (shared Keychain group), send-only.
+        let cfg = LocalSendConfig(port: LocalSendConstants.port,
+                                  deviceModel: UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
+                                  deviceType: "mobile", tls: TLSIdentityStore.loadOrCreate(), advertise: false, serve: false)
         let t = LocalSendTransport(config: cfg)
         transport = t
         t.start(host: self)

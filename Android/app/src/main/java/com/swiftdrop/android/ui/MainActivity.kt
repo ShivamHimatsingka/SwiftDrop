@@ -47,10 +47,39 @@ class MainActivity : ComponentActivity() {
         if (android.os.Build.VERSION.SDK_INT >= 33) perms += Manifest.permission.NEARBY_WIFI_DEVICES
         else if (android.os.Build.VERSION.SDK_INT >= 31) perms += Manifest.permission.ACCESS_FINE_LOCATION
         requestPermissions(perms.toTypedArray(), 1)
+        // Receiving with the screen off needs SwiftDrop exempt from battery optimisation (Doze).
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) runCatching {
+            startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                android.net.Uri.parse("package:$packageName")))
+        }
         setContent { MaterialTheme(colorScheme = lightColorScheme(primary = IOS.blue)) { Home() } }
+        testSend(intent)
     }
 
     override fun onResume() { super.onResume(); Engine.refresh() }
+
+    override fun onNewIntent(intent: android.content.Intent) { super.onNewIntent(intent); testSend(intent) }
+
+    /** Debug builds only: am start ... --es testSendTo "<alias>" --es testFiles "<path>|<path>" --es testText "…" */
+    private fun testSend(i: android.content.Intent) {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        val to = i.getStringExtra("testSendTo") ?: return
+        val files = i.getStringExtra("testFiles")?.split('|')?.filter { it.isNotBlank() } ?: emptyList()
+        val text = i.getStringExtra("testText")
+        Thread {
+            repeat(60) {
+                val p = Engine.peers.value.firstOrNull { it.alias == to }
+                if (p != null) {
+                    val items = files.map { path -> val f = java.io.File(path)
+                        OutItem(f.name, f.length(), "application/octet-stream", { f.inputStream() }) } +
+                        listOfNotNull(text?.let { textItem(it) })
+                    Engine.send(p, items); return@Thread
+                }
+                Thread.sleep(500)
+            }
+        }.start()
+    }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<String>, results: IntArray) {
         super.onRequestPermissionsResult(code, perms, results)
