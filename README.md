@@ -105,7 +105,10 @@ Connection events are logged to `~/Library/Logs/SwiftDrop/SwiftDrop.log` on the 
   When a Mac can't reach the paused iPhone, it knocks over Bluetooth, and the iPhone shows
   **"“Mac” wants to send 3 items. Tap to receive."** Tapping it opens SwiftDrop and the transfer completes without
   a second Accept. Allow notifications for this to work. Sending works any time.
-  (The knock is sent by the Mac app today; Android and Windows senders don't knock yet.)
+  Macs, Android phones and Windows PCs all knock. One limit for **Android and Windows**: a locked iPhone is
+  invisible to their Bluetooth scans and changes its Bluetooth address about every 15 minutes, so they can only
+  wake an iPhone they've seen with SwiftDrop open in the last ~15 minutes. Otherwise they say
+  "iPhone is asleep — open SwiftDrop on it". Macs can always find it.
 - **"No app" on Android** is as close as Android allows: there's no screen to open, but Android
   requires a (minimised, silent) notification for any background service.
 - **Discovery** uses LocalSend's multicast announcements, Bluetooth LE, Bonjour, and a subnet scan as a last resort.

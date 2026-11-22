@@ -38,6 +38,8 @@ class Ble(private val ctx: Context) {
         val SERVICE: UUID = UUID.fromString("7A4F0001-5D3F-4B6E-9C2A-53574946544F")
         val INFO: UUID = UUID.fromString("7A4F0002-5D3F-4B6E-9C2A-53574946544F")
         val CONNECT: UUID = UUID.fromString("7A4F0003-5D3F-4B6E-9C2A-53574946544F")
+        /** Write-only knock that wakes a paused iPhone app ("Tap to receive"). */
+        val WAKE: UUID = UUID.fromString("7A4F0004-5D3F-4B6E-9C2A-53574946544F")
     }
 
     var card: (() -> BleCard?)? = null
@@ -140,7 +142,20 @@ class Ble(private val ctx: Context) {
         return runCatching { result.get(20, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull()
     }
 
-    private fun gattOp(device: BluetoothDevice, write: ByteArray?, char: UUID = INFO, poll: Boolean = false, done: (String?) -> Unit) {
+    /**
+     * Knock on a paused iPhone. [address] is the one saved from its last card read: a locked
+     * iPhone doesn't show up in scans from non-Apple devices, and rotates its address every
+     * ~15 minutes, so this only works for iPhones seen recently. Blocks up to ~15 s.
+     */
+    fun wake(address: String, knockJson: String): Boolean {
+        val device = runCatching { adapter?.getRemoteDevice(address) }.getOrNull() ?: return false
+        val result = java.util.concurrent.CompletableFuture<String?>()
+        gattOp(device, write = knockJson.toByteArray(), char = WAKE, readBack = false) { result.complete(it) }
+        return runCatching { result.get(15, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull() == "written"
+    }
+
+    private fun gattOp(device: BluetoothDevice, write: ByteArray?, char: UUID = INFO, poll: Boolean = false,
+                       readBack: Boolean = true, done: (String?) -> Unit) {
         var finished = false
         var attempts = 0
         fun finish(g: BluetoothGatt, v: String?) {
@@ -160,7 +175,10 @@ class Ble(private val ctx: Context) {
                     else @Suppress("DEPRECATION") { ch.value = write; g.writeCharacteristic(ch) }
                 } else g.readCharacteristic(ch)
             }
-            override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) { g.readCharacteristic(ch) }
+            override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+                if (readBack) g.readCharacteristic(ch)
+                else finish(g, if (status == BluetoothGatt.GATT_SUCCESS) "written" else null)
+            }
             override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) =
                 handle(g, ch, String(value))
             @Deprecated("API < 33") override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) =

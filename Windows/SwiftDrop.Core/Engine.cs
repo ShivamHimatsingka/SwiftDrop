@@ -171,10 +171,16 @@ public sealed class Engine
         ? new BleCard(Settings.Name, Fingerprint, DeviceModel, "desktop", Port, Scheme, LocalIPv4().Select(a => a.ToString()).ToList(), new())
         : null;
 
+    /// Platform hook: write a knock to the device at this Bluetooth address. Returns true if delivered.
+    public Func<ulong, string, Task<bool>>? WakeDevice;
+    readonly ConcurrentDictionary<string, (ulong address, DateTime seen)> _wakeable = new();
+
     /// A card read over Bluetooth: connect over the normal network if possible.
-    public async Task HandleCard(BleCard card)
+    public async Task HandleCard(BleCard card, ulong address = 0)
     {
-        if (card.Fingerprint == Fingerprint || _peers.ContainsKey(card.Fingerprint)) return;
+        if (card.Fingerprint == Fingerprint) return;
+        if (address != 0 && card.Caps.Contains("wake")) _wakeable[card.Fingerprint] = (address, DateTime.UtcNow);
+        if (_peers.ContainsKey(card.Fingerprint)) return;
         foreach (var ip in card.Ips)
             foreach (var scheme in new[] { card.Scheme, card.Scheme == "https" ? "http" : "https" })
                 if (await Register($"{scheme}://{ip}:{card.Port}", probe: true) is { } info) { Ingest(info, ip, card.Port, scheme); return; }
@@ -192,7 +198,8 @@ public sealed class Engine
             {
                 if (await Register(p.BaseUrl, probe: false) != null) { _misses.TryRemove(p.Id, out _); return; }
                 // Two consecutive misses before a device disappears (slow Wi-Fi / sleeping phones).
-                if (_misses.AddOrUpdate(p.Id, 1, (_, n) => n + 1) >= 2 && !TransferOf(p.Id).phase.IsActive())
+                var sleeping = _wakeable.TryGetValue(p.Id, out var wk) && DateTime.UtcNow - wk.seen < TimeSpan.FromMinutes(15);
+                if (_misses.AddOrUpdate(p.Id, 1, (_, n) => n + 1) >= 2 && !TransferOf(p.Id).phase.IsActive() && !sleeping)
                 { _peers.TryRemove(p.Id, out _); _misses.TryRemove(p.Id, out _); Changed?.Invoke(); }
             }));
             if (deep || _peers.IsEmpty) await Scan();
@@ -489,8 +496,33 @@ public sealed class Engine
         Changed?.Invoke();
     }
 
+    async Task<bool> Reachable(Peer p) => await Register(p.BaseUrl, probe: true) != null;
+
+    /// A paused iPhone can't answer: knock over Bluetooth, then wait for the user to tap "Tap to receive".
+    /// A locked iPhone is invisible to non-Apple scans and rotates its address (~15 min), so we use the
+    /// address saved from its last card and only for iPhones seen recently.
+    async Task WakeIfNeeded(Peer peer, IReadOnlyList<OutItem> items, CancellationToken ct)
+    {
+        if (!_wakeable.TryGetValue(peer.Id, out var w) || WakeDevice == null) return;
+        if (await Reachable(peer)) return;
+        if (DateTime.UtcNow - w.seen > TimeSpan.FromMinutes(15))
+            throw new TransferException(Phase.Failed, $"{peer.Alias} is asleep — open SwiftDrop on it and try again");
+        var what = items.Count == 1 ? Path.GetFileName(items[0].Name) : $"{items.Count} items";
+        var knock = JsonSerializer.Serialize(new Dictionary<string, string> { ["a"] = Settings.Name, ["f"] = Fingerprint, ["n"] = what });
+        if (!await WakeDevice(w.address, knock))
+            throw new TransferException(Phase.Failed, $"{peer.Alias} is asleep — open SwiftDrop on it and try again");
+        var deadline = DateTime.UtcNow.AddMinutes(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(1500, ct);
+            if (await Reachable(peer)) return;
+        }
+        throw new TransferException(Phase.Failed, $"{peer.Alias} didn’t open SwiftDrop");
+    }
+
     async Task SendAsync(Peer peer, IReadOnlyList<OutItem> items, CancellationToken ct)
     {
+        await WakeIfNeeded(peer, items, ct);
         var ids = items.Select(_ => Guid.NewGuid().ToString()).ToList();
         var files = items.Select((it, i) => new FileDto { Id = ids[i], FileName = it.Name, Size = Math.Max(0, it.Size), FileType = it.Mime, Preview = it.Preview })
             .ToDictionary(f => f.Id);

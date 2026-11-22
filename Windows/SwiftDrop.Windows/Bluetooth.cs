@@ -22,7 +22,36 @@ public sealed class Bluetooth
     readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, DateTime> _lastRead = new();
     bool _advertising;
 
-    public Bluetooth(Engine engine) { _engine = engine; engine.BluetoothChanged += () => _ = UpdateAdvertising(); }
+    public Bluetooth(Engine engine)
+    {
+        _engine = engine;
+        engine.BluetoothChanged += () => _ = UpdateAdvertising();
+        engine.WakeDevice = Knock;
+    }
+
+    /// Write a wake-up knock to a (paused) iPhone at a known address.
+    async Task<bool> Knock(ulong address, string json)
+    {
+        try
+        {
+            using var device = await BluetoothLEDevice.FromBluetoothAddressAsync(address);
+            if (device == null) return false;
+            var services = await device.GetGattServicesForUuidAsync(BleCard.Service, BluetoothCacheMode.Uncached);
+            var svc = services.Services.FirstOrDefault();
+            if (svc == null) return false;
+            using (svc)
+            {
+                var chars = await svc.GetCharacteristicsForUuidAsync(BleCard.Wake, BluetoothCacheMode.Uncached);
+                var ch = chars.Characteristics.FirstOrDefault();
+                if (ch == null) return false;
+                var w = new DataWriter();
+                w.WriteBytes(Encoding.UTF8.GetBytes(json));
+                var result = await ch.WriteValueWithResultAsync(w.DetachBuffer(), GattWriteOption.WriteWithResponse);
+                return result.Status == GattCommunicationStatus.Success;
+            }
+        }
+        catch { return false; }
+    }
 
     public async Task Start()
     {
@@ -101,7 +130,7 @@ public sealed class Bluetooth
                 var read = await ch.ReadValueAsync(BluetoothCacheMode.Uncached);
                 if (read.Status != GattCommunicationStatus.Success) return;
                 var json = Encoding.UTF8.GetString(read.Value.ToArray());
-                if (JsonSerializer.Deserialize<BleCard>(json) is { } card) await _engine.HandleCard(card);
+                if (JsonSerializer.Deserialize<BleCard>(json) is { } card) await _engine.HandleCard(card, address);
             }
         }
         catch { }

@@ -70,6 +70,8 @@ object Engine {
     @Volatile private var browsingUntil = 0L
     private val misses = ConcurrentHashMap<String, Int>()
     private var ble: Ble? = null
+    /** iPhones that accept Bluetooth knocks: fingerprint -> (Bluetooth address, last seen). */
+    private val wakeable = ConcurrentHashMap<String, Pair<String, Long>>()
     private var wifiDirect: WifiDirect? = null
 
     private val prefs get() = app.getSharedPreferences("swiftdrop", Context.MODE_PRIVATE)
@@ -142,7 +144,9 @@ object Engine {
 
     /** A Bluetooth card: reach the device over Wi‑Fi if we can, otherwise offer Wi‑Fi Direct. */
     private fun onBleCard(card: BleCard, address: String) {
-        if (card.fingerprint == fingerprint || peers.value.any { it.id == card.fingerprint && it.hasLan }) return
+        if (card.fingerprint == fingerprint) return
+        if ("wake" in card.caps) wakeable[card.fingerprint] = address to System.currentTimeMillis()
+        if (peers.value.any { it.id == card.fingerprint && it.hasLan }) return
         io.execute {
             val me = me()
             for (ip in card.ips) {
@@ -170,7 +174,8 @@ object Engine {
                 val ok = runCatching { Client.postJson("${p.baseUrl}/api/localsend/v2/register", me().toJson(), 4000) }.getOrNull()?.first == 200
                 if (ok) misses.remove(p.id)
                 // Drop only after two consecutive misses, so a slow handshake doesn't hide a nearby device.
-                else if ((misses.merge(p.id, 1, Int::plus) ?: 0) >= 2) {
+                else if ((misses.merge(p.id, 1, Int::plus) ?: 0) >= 2 &&
+                         (wakeable[p.id]?.second ?: 0) < System.currentTimeMillis() - 15 * 60_000) {
                     misses.remove(p.id)
                     peers.update { l -> if (transfers.value[p.id]?.first?.active == true) l else l.filterNot { it.id == p.id } }
                 }
@@ -372,7 +377,31 @@ object Engine {
         return peer.copy(host = ip, port = port)
     }
 
+    private fun reachable(p: Peer) = p.hasLan &&
+        runCatching { Client.postJson("${p.baseUrl}/api/localsend/v2/register", me().toJson(), 2000) }.getOrNull()?.first == 200
+
+    /** A paused iPhone can't answer: knock over Bluetooth, then wait for "Tap to receive". */
+    private fun wakeIfNeeded(peer: Peer, items: List<OutItem>) {
+        val (address, seen) = wakeable[peer.id] ?: return
+        if (reachable(peer)) return
+        if (System.currentTimeMillis() - seen > 15 * 60_000)
+            throw TransferException(Phase.FAILED, "${peer.alias} is asleep — open SwiftDrop on it and try again")
+        val what = if (items.size == 1) items[0].name.substringAfterLast('/') else "${items.size} items"
+        val knock = JSONObject().put("a", deviceName).put("f", fingerprint).put("n", what).toString()
+        android.util.Log.i("SwiftDrop", "${peer.alias} isn't answering — knocking over Bluetooth")
+        if (ble?.wake(address, knock) != true)
+            throw TransferException(Phase.FAILED, "${peer.alias} is asleep — open SwiftDrop on it and try again")
+        val deadline = System.currentTimeMillis() + 120_000
+        while (System.currentTimeMillis() < deadline) {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException()
+            Thread.sleep(1500)
+            if (reachable(peer)) return
+        }
+        throw TransferException(Phase.FAILED, "${peer.alias} didn’t open SwiftDrop")
+    }
+
     private fun doSend(original: Peer, items: List<OutItem>) {
+        wakeIfNeeded(original, items)
         val peer = resolve(original)
         val ids = items.map { UUID.randomUUID().toString() }
         val files = JSONObject()

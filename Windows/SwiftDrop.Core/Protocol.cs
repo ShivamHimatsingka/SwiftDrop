@@ -114,4 +114,6 @@ public record BleCard(
 {
     public static readonly Guid Service = Guid.Parse("7A4F0001-5D3F-4B6E-9C2A-53574946544F");
     public static readonly Guid Info = Guid.Parse("7A4F0002-5D3F-4B6E-9C2A-53574946544F");
+    /// Write-only knock that wakes a paused iPhone app ("Tap to receive").
+    public static readonly Guid Wake = Guid.Parse("7A4F0004-5D3F-4B6E-9C2A-53574946544F");
 }
