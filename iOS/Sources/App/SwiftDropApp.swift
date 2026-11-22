@@ -11,6 +11,9 @@ struct SwiftDropApp: App {
         // iOS closes our sockets while the app is paused; writing to one afterwards raises
         // SIGPIPE, which would kill the app on unlock. Treat it as a normal I/O error instead.
         signal(SIGPIPE, SIG_IGN)
+        // Start immediately — not when a screen appears. iOS may relaunch SwiftDrop in the
+        // background (no UI) to deliver a Bluetooth knock; the engine must be running for that.
+        PhoneModel.shared.start()
     }
 
     var body: some Scene {

@@ -54,6 +54,10 @@ class Ble(private val ctx: Context) {
     private val busy = ConcurrentHashMap.newKeySet<String>()
     private val connectReplies = ConcurrentHashMap<String, String>()  // BLE address -> reply
     private var advertising = false
+    private var scanning = false
+    @Volatile private var scanUntil = 0L
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val periodic = object : Runnable { override fun run() { burst(15_000); handler.postDelayed(this, 300_000) } }
 
     private val advertiseCallback = object : AdvertiseCallback() {}
     private val scanCallback = object : ScanCallback() {
@@ -66,17 +70,34 @@ class Ble(private val ctx: Context) {
         if (!a.isEnabled) return@runCatching
         openServer()
         updateAdvertising()
-        a.bluetoothLeScanner?.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE)).build()),
-            ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build(), scanCallback)
+        // Lightweight: scan in short bursts (20 s now, 15 s every 5 min, 60 s when a send screen opens).
+        burst(20_000)
+        handler.removeCallbacks(periodic); handler.postDelayed(periodic, 300_000)
+    }
+
+    private fun burst(ms: Long) = runCatching {
+        scanUntil = maxOf(scanUntil, System.currentTimeMillis() + ms)
+        val scanner = adapter?.takeIf { it.isEnabled }?.bluetoothLeScanner ?: return@runCatching
+        if (!scanning) {
+            scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE)).build()),
+                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build(), scanCallback)
+            scanning = true
+        }
+        handler.postDelayed({
+            if (scanning && System.currentTimeMillis() >= scanUntil) {
+                runCatching { adapter?.bluetoothLeScanner?.stopScan(scanCallback) }; scanning = false
+            }
+        }, ms + 500)
     }
 
     fun stop() = runCatching {
-        adapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        handler.removeCallbacks(periodic)
+        adapter?.bluetoothLeScanner?.stopScan(scanCallback); scanning = false
         adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
         server?.close(); server = null; advertising = false
     }
 
-    fun refresh() = runCatching { lastRead.clear(); updateAdvertising() }
+    fun refresh() = runCatching { lastRead.clear(); updateAdvertising(); burst(60_000) }
 
     fun updateAdvertising() = runCatching {
         val adv = adapter?.bluetoothLeAdvertiser ?: return@runCatching
@@ -129,7 +150,8 @@ class Ble(private val ctx: Context) {
 
     private fun read(device: BluetoothDevice) {
         val now = System.currentTimeMillis()
-        if ((lastRead[device.address] ?: 0) > now - 60_000 || !busy.add(device.address)) return
+        // At most every 5 min per device: each read wakes a sleeping iPhone.
+        if ((lastRead[device.address] ?: 0) > now - 300_000 || !busy.add(device.address)) return
         lastRead[device.address] = now
         gattOp(device, write = null) { value -> value?.let { BleCard.from(it) }?.let { onCard?.invoke(it, device.address) } }
     }

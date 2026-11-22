@@ -64,7 +64,8 @@ final class PhoneModel: ObservableObject, TransportHost {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         SDLog.log("launched (\(UIApplication.shared.applicationState == .background ? "in background" : "foreground"))")
         t.start(host: self)
-        refresh(deep: true)
+        // No scan here: a background relaunch (Bluetooth knock) should stay cheap. Discovery
+        // runs when the app comes on screen (didBecomeActive).
         #if DEBUG
         // UI-test hook: -SwiftDropTestSend "swiftdrop://send?to=…"
         if let u = UserDefaults.standard.string(forKey: "SwiftDropTestSend"), let url = URL(string: u) { handle(url) }
@@ -80,24 +81,35 @@ final class PhoneModel: ObservableObject, TransportHost {
         #endif
     }
 
-    func refresh(deep: Bool = false) { transport?.refresh(deep: deep) }
+    func refresh(deep: Bool = false) {
+        browsingUntil = Date().addingTimeInterval(120)
+        transport?.refresh(deep: deep)
+    }
 
     func didBecomeActive() {
         if wasBackgrounded { wasBackgrounded = false; transport?.resumeAfterBackground() } else { refresh() }
     }
 
-    /// A Mac (or another device) knocked over Bluetooth while we were paused.
+    /// A Mac, PC or phone knocked over Bluetooth while we were paused (or not running).
     private func knocked(_ k: BLEWake) {
         guard canReceive(from: k.f) else { return }
         if UIApplication.shared.applicationState == .active { refresh(); return }   // already listening
+        notify(id: "knock-\(k.f)", body: "“\(k.a)” wants to send \(k.n). Tap to receive.", fingerprint: k.f)
+    }
+
+    /// Lock-screen notification (standard "active" level: shown on the Lock Screen and
+    /// Notification Centre with a sound, as long as SwiftDrop's notifications are allowed).
+    private func notify(id: String, body: String, fingerprint: String? = nil) {
         let content = UNMutableNotificationContent()
         content.title = "SwiftDrop"
-        content.body = "“\(k.a)” wants to send \(k.n). Tap to receive."
+        content.body = body
         content.sound = .default
-        content.userInfo = ["fp": k.f]
-        content.interruptionLevel = .timeSensitive
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "knock-\(k.f)", content: content, trigger: nil))
+        content.threadIdentifier = "swiftdrop"
+        if let fingerprint { content.userInfo = ["fp": fingerprint] }
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
+
+    private var inBackground: Bool { UIApplication.shared.applicationState != .active }
 
     func didEnterBackground() {
         wasBackgrounded = true
@@ -116,11 +128,16 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     func isFavorite(_ id: String?) -> Bool { id.map { fid in favorites.contains { $0.id == fid } } ?? false }
 
+    /// Set while a sending screen is open, so devices we're sending to can see us.
+    private var browsingUntil = Date.distantPast
+
     func isDiscoverable(by peerID: String?) -> Bool {
+        if Date() < browsingUntil { return true }
         switch receiveMode {
         case .everyone: return true
-        case .favorites: return isFavorite(peerID) || peerID == nil
-        case .off: return peerID == nil   // still announce when we're the one browsing
+        // Keep advertising (Bluetooth) so favourites can find and wake us; only favourites get answers.
+        case .favorites: return peerID == nil || isFavorite(peerID)
+        case .off: return false
         }
     }
 
@@ -144,6 +161,7 @@ final class PhoneModel: ObservableObject, TransportHost {
     }
 
     func transportShouldAccept(_ offer: IncomingOffer) async -> IncomingDecision {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["knock-\(offer.senderID)"])
         if let until = consent.removeValue(forKey: offer.senderID), until > Date() {   // they tapped "Tap to receive"
             let state = IncomingState(offer: offer)
             state.phase = .receiving
@@ -183,6 +201,7 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     func transportDidReceiveMessage(_ text: String, offer: IncomingOffer) {
         message = (text, offer.senderAlias)
+        if inBackground { notify(id: "msg-\(offer.id)", body: "Message from “\(offer.senderAlias)”: \(text.prefix(140))") }
         addHistory(HistoryItem(direction: .received, title: String(text.prefix(80)), deviceAlias: offer.senderAlias,
                                paths: [], text: text))
     }
@@ -203,6 +222,9 @@ final class PhoneModel: ObservableObject, TransportHost {
         s.files = files
         s.progress = 1
         s.phase = .done
+        if inBackground {
+            notify(id: "done-\(offerID)", body: "Received \(files.count == 1 ? files[0].lastPathComponent : "\(files.count) items") from “\(s.offer.senderAlias)”.")
+        }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         addHistory(HistoryItem(direction: .received,
                                title: files.count == 1 ? files[0].lastPathComponent : "\(s.offer.files.count) Items",

@@ -95,10 +95,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             ble.onWake = { [weak self] w in self?.onWake?(w) }
             ble.start(advertise: config.advertise)
         }
-        if p2p {
-            p2pBrowser.onChange = { [weak self] found in self?.handleP2P(found) }
-            p2pBrowser.start()
-        }
+        if p2p { p2pBrowser.onChange = { [weak self] found in self?.handleP2P(found) } }
 
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
@@ -148,11 +145,26 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             visibleCache = visible
             if config.advertise && config.directLink { server?.setService(visible ? bonjourService() : nil) }
         }
-        ble.refresh()
+        ble.visibilityChanged()
         if visible { discovery.send(myInfo(announce: true)) }
     }
 
     // MARK: Bluetooth + direct link
+
+    private var browseUntil = Date.distantPast
+    private var browsing = false
+
+    /// Peer-to-peer Wi‑Fi browsing keeps the AWDL radio busy, so (like AirDrop) only browse
+    /// for two minutes after a sending screen opens. Being *found* doesn't need this.
+    @MainActor private func browseDirectLinks() {
+        guard config.directLink, DirectLinkPreference.current != .off else { return }
+        browseUntil = Date().addingTimeInterval(120)
+        if !browsing { p2pBrowser.start(); browsing = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 121) { [weak self] in
+            guard let self, self.browsing, Date() >= self.browseUntil else { return }
+            self.p2pBrowser.stop(); self.browsing = false
+        }
+    }
 
     private func bonjourService() -> NWListener.Service {
         NWListener.Service(name: "SwiftDrop-\(fingerprint.prefix(16))", type: P2P.serviceType,
@@ -219,8 +231,11 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     }
 
     @MainActor func refresh(deep: Bool) {
-        visibleCache = true          // a sending UI is open: be findable while browsing
+        announceIfVisible()          // the host reports "visible" while a sending screen is open
         ble.refresh()
+        browseDirectLinks()
+        // …and re-check once that window has passed, so "Receiving Off" really goes dark again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 125) { [weak self] in self?.announceIfVisible() }
         discovery.joinGroups()
         discovery.send(myInfo(announce: true))
         let peers = stateLock.withLock { Array(knownPeers.values.filter(\.hasLAN)) }
@@ -250,7 +265,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             if missCount[peerID]! >= 2 {
                 missCount[peerID] = nil
                 // Paused iPhone: still advertising over Bluetooth, so keep it listed (we can wake it).
-                if let seen = bleSeen[peerID], Date().timeIntervalSince(seen) < 180, wakeable.contains(peerID) { return false }
+                if let seen = bleSeen[peerID], Date().timeIntervalSince(seen) < 600, wakeable.contains(peerID) { return false }
                 if var p = knownPeers[peerID], p.awdlService != nil {   // still reachable directly
                     p.host = ""; knownPeers[peerID] = p; return false
                 }
@@ -454,7 +469,13 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         }
         let knock = BLEWake(a: alias, f: fingerprint, n: payload.summary)
         SDLog.log("\(peer.alias) isn't answering — knocking over Bluetooth")
-        guard await ble.wake(peer.id, knock) else {
+        var delivered = await ble.wake(peer.id, knock)
+        if !delivered {                       // saved Bluetooth identity went stale: find it again
+            ble.forget(peer.id); ble.refresh()
+            for _ in 0..<20 where !ble.canWake(peer.id) { try await Task.sleep(for: .milliseconds(500)) }
+            if ble.canWake(peer.id) { delivered = await ble.wake(peer.id, knock) }
+        }
+        guard delivered else {
             throw TransferError.unreachable("\(peer.alias) isn’t answering — open SwiftDrop on it and try again")
         }
         let deadline = Date().addingTimeInterval(120)

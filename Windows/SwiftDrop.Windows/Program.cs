@@ -81,7 +81,18 @@ public sealed class App : Application
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
         Engine = new Engine();
         Engine.Decide = offer => Dispatcher.Invoke(() => ShowIncoming(offer));
-        Engine.IncomingChanged += i => Dispatcher.BeginInvoke(() => _incoming?.Update(i));
+        Engine.IncomingChanged += i => Dispatcher.BeginInvoke(() =>
+        {
+            // Auto-accepted (favourite) transfers never asked, so open the status window now.
+            if ((_incoming == null || !_incoming.IsVisible || _incoming.OfferId != i.Id) && i.Status != Incoming.State.Asking)
+            {
+                _incoming?.Close();
+                var done = new TaskCompletionSource<bool>(); done.SetResult(true);
+                _incoming = new IncomingWindow(this, i, done);
+                _incoming.Show();
+            }
+            _incoming?.Update(i);
+        });
         Engine.MessageReceived += (from, text) => Dispatcher.BeginInvoke(() =>
             new MessageWindow(from, text).Show());
         Engine.Start();

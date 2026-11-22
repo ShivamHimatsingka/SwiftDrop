@@ -360,6 +360,7 @@ public sealed class IncomingWindow : Window
 {
     readonly App _app; readonly TaskCompletionSource<bool> _tcs; readonly StackPanel _body = new();
     Incoming _offer;
+    public string OfferId => _offer.Id;
 
     public IncomingWindow(App app, Incoming offer, TaskCompletionSource<bool> tcs)
     {

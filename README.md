@@ -10,7 +10,7 @@ so it also works with every device that already runs LocalSend (Linux included).
 |---|---|---|---|---|
 | Tech | Swift + SwiftUI | Swift + SwiftUI | Kotlin + Compose | .NET 8 + WPF |
 | Send from the system share menu | Finder ▸ Share ▸ SwiftDrop | Share sheet ▸ SwiftDrop | Share ▸ SwiftDrop | Explorer ▸ right-click ▸ Send with SwiftDrop |
-| Receive with nothing open | ✅ menu bar app, starts at login | ✅ even when locked: a Bluetooth knock shows a "Tap to receive" notification | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
+| Receive with nothing open | ✅ menu bar app, starts at login | ✅ even when locked: a "Tap to receive" notification on the Lock Screen | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
 | Accept prompt | Notification-style banner | AirDrop-style card | Heads-up notification + card | Toast above the tray |
 | Visibility | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone |
 | Size | 2.4 MB | 2.5 MB | 2 MB APK | 25 MB exe (incl. Windows Bluetooth bindings) |
@@ -71,6 +71,42 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
 ```
 
 ---
+
+## How to use
+
+### What has to be open where
+
+| | To be **found and receive** | To **send** |
+|---|---|---|
+| **Mac** | SwiftDrop in the menu bar. Turn on *Settings ▸ Open at login* and you never think about it again. | Finder: right-click ▸ **Share ▸ SwiftDrop**. Or drag files, images or text onto the menu-bar icon. Or click the menu-bar icon ▸ click a person. |
+| **iPhone / iPad** | **Nothing on screen.** Open SwiftDrop once after installing or restarting the phone, then lock it or switch apps freely. When someone sends, a **"Tap to receive"** notification appears on the Lock Screen. Tap it and the transfer finishes. ⚠️ Don't swipe SwiftDrop away in the app switcher: a force-quit app can't be woken until you open it again. | Any app's **Share** button ▸ **SwiftDrop**. Or open SwiftDrop ▸ tap a person ▸ Photos / Files / Clipboard. |
+| **Android** | **Nothing.** After opening it once, SwiftDrop receives in the background and after reboots. Switch receiving on or off with the **SwiftDrop Quick Settings tile**. An Accept / Decline notification pops up for each transfer. | Any app's **Share** button ▸ **SwiftDrop**. Or open SwiftDrop ▸ tap a person. |
+| **Windows** | **Nothing.** SwiftDrop starts at sign-in and lives in the tray. A prompt appears above the tray for each transfer. | Explorer: right-click ▸ **Send with SwiftDrop** (Windows 11: *Show more options*). Or click the tray icon ▸ click a person, or drop files on the panel. |
+
+### Receiving modes (all platforms)
+- **Everyone**: anyone nearby can see you and send you an Accept request.
+- **Favorites Only**: only devices you've starred can see you. Right-click (Mac/Windows) or long-press (phones) a device ▸ *Add to Favorites*. Turn on *Auto-accept* for your own devices and their files arrive with no prompt.
+- **Off**: you're invisible, except for 2 minutes while you're sending something yourself.
+
+### Waking a locked iPhone
+- **From a Mac:** always works.
+- **From Android or Windows:** works if that device has seen the iPhone with SwiftDrop *open* in about the last 15 minutes. A locked iPhone is invisible to non-Apple Bluetooth scans and changes its address. Otherwise you'll see "iPhone is asleep — open SwiftDrop on it".
+- **On the iPhone:** SwiftDrop's notifications must be allowed (Settings ▸ Notifications ▸ SwiftDrop), including *Lock Screen*.
+
+### Permissions each app asks for
+| | |
+|---|---|
+| Mac | Local Network, Bluetooth, and access to the folders you send from or save to |
+| iPhone | Local Network, Bluetooth, Notifications, and Photos (add-only, so received photos go into your library) |
+| Android | Notifications, Nearby devices (Bluetooth and Wi‑Fi Direct). Android 10–11 also asks for Location for Bluetooth scanning. |
+| Windows | Windows Firewall: allow on *Private* networks |
+
+### Light on battery and memory
+SwiftDrop is idle almost all the time:
+- Bluetooth scans in short bursts: 20 s at start, 15 s every 5 minutes, 60 s when you open a send screen.
+- Each device's Bluetooth card is read at most every 5 minutes, so a sleeping iPhone isn't woken constantly.
+- The Mac and iPhone search for peer-to-peer Wi‑Fi only while a send screen is open, like AirDrop.
+- Nothing polls in the background.
 
 ## Bluetooth discovery and direct Wi‑Fi links
 

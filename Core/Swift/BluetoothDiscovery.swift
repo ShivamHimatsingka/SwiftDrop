@@ -49,9 +49,21 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
     private var peripheralFor: [String: UUID] = [:]          // fingerprint -> peripheral (from card reads)
     private var pendingWake: [UUID: (Data, CheckedContinuation<Bool, Never>)] = [:]
 
+    // Lightweight scanning: short bursts instead of a permanent scan.
+    private var scanning = false
+    private var scanUntil = Date.distantPast
+    private var burstTimer: DispatchSourceTimer?
+    private static let cardTTL: TimeInterval = 300            // re-read a device's card at most every 5 min
+
     func start(advertise: Bool) {
         self.advertise = advertise
-        queue.async {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let t = DispatchSource.makeTimerSource(queue: self.queue)
+            t.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(30))
+            t.setEventHandler { [weak self] in self?.burst(15) }
+            t.resume()
+            self.burstTimer = t
             if advertise {
                 #if os(iOS)
                 let opts: [String: Any] = [CBPeripheralManagerOptionRestoreIdentifierKey: "swiftdrop.peripheral"]
@@ -66,18 +78,37 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
 
     func stop() {
         queue.async {
+            self.burstTimer?.cancel(); self.burstTimer = nil
             self.peripheral?.stopAdvertising()
-            self.central?.stopScan()
+            self.central?.stopScan(); self.scanning = false
             self.connecting.values.forEach { self.central?.cancelPeripheralConnection($0) }
         }
     }
 
-    /// Re-scan (e.g. when a sending UI opens) and re-evaluate advertising.
+    /// Visibility changed: start/stop advertising only (cheap; no scanning, no card reads).
+    func visibilityChanged() { queue.async { self.updateAdvertising() } }
+
+    /// A sending screen opened (or we need a fresh card): scan for a minute and re-read cards.
     func refresh() {
         queue.async {
             self.updateAdvertising()
             self.lastRead.removeAll()
-            if self.central?.state == .poweredOn { self.scan() }
+            self.burst(60)
+        }
+    }
+
+    /// Scan for `seconds`, then stop (extends a burst already running).
+    private func burst(_ seconds: TimeInterval) {
+        scanUntil = max(scanUntil, Date().addingTimeInterval(seconds))
+        guard central?.state == .poweredOn else { return }
+        if !scanning {
+            central?.scanForPeripherals(withServices: [SwiftDropBLE.service],
+                                        options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+            scanning = true
+        }
+        queue.asyncAfter(deadline: .now() + seconds + 0.5) { [weak self] in
+            guard let self, self.scanning, Date() >= self.scanUntil else { return }
+            self.central?.stopScan(); self.scanning = false
         }
     }
 
@@ -139,17 +170,13 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
 
     func centralManagerDidUpdateState(_ c: CBCentralManager) {
         SDLog.log("Bluetooth state \(c.state.rawValue) (5 = on), authorization \(CBManager.authorization.rawValue) (3 = allowed)")
-        if c.state == .poweredOn { scan() }
-    }
-
-    private func scan() {
-        central?.scanForPeripherals(withServices: [SwiftDropBLE.service],
-                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        scanning = false
+        if c.state == .poweredOn { burst(20) }
     }
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
-        // Read each device's card at most once a minute.
-        if let t = lastRead[p.identifier], Date().timeIntervalSince(t) < 60 { return }
+        // Read each device's card at most every few minutes (each read wakes a sleeping iPhone).
+        if let t = lastRead[p.identifier], Date().timeIntervalSince(t) < Self.cardTTL { return }
         guard connecting[p.identifier] == nil, connecting.count < 4 else { return }
         lastRead[p.identifier] = Date()
         connecting[p.identifier] = p
@@ -196,6 +223,9 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
 
     /// True if we've read this device's card over Bluetooth and can knock on it.
     func canWake(_ fingerprint: String) -> Bool { queue.sync { peripheralFor[fingerprint] != nil } }
+
+    /// The saved peripheral didn't respond (its Bluetooth address rotated): forget it.
+    func forget(_ fingerprint: String) { queue.async { self.peripheralFor[fingerprint] = nil } }
 
     /// Knock on a paused device over Bluetooth. Returns true when the write was acknowledged.
     func wake(_ fingerprint: String, _ knock: BLEWake) async -> Bool {
