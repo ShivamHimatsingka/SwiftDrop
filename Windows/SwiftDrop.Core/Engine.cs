@@ -10,6 +10,27 @@ using System.Text.Json.Nodes;
 
 namespace SwiftDrop.Core;
 
+/// Small diagnostics log: %LOCALAPPDATA%\SwiftDrop\SwiftDrop.log (kept under 1 MB).
+public static class Log
+{
+    static readonly object Gate = new();
+    public static readonly string Path = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SwiftDrop", "SwiftDrop.log");
+    public static void Write(string line)
+    {
+        try
+        {
+            lock (Gate)
+            {
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+                if (File.Exists(Path) && new FileInfo(Path).Length > 1_000_000) File.Delete(Path);
+                File.AppendAllText(Path, $"{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ss.fffZ} {line}\n");
+            }
+        }
+        catch { }
+    }
+}
+
 public sealed class Settings
 {
     public string Name { get; set; } = Environment.MachineName;
@@ -214,12 +235,18 @@ public sealed class Engine
                 if (_misses.AddOrUpdate(p.Id, 1, (_, n) => n + 1) >= 2 && !TransferOf(p.Id).phase.IsActive() && !sleeping)
                 { _peers.TryRemove(p.Id, out _); _misses.TryRemove(p.Id, out _); Changed?.Invoke(); }
             }));
-            if (deep || _peers.IsEmpty) await Scan(reveal);
+            // iPhones can't use multicast (Apple restricts it), so without Bluetooth a scan is the only way
+            // to find them: scan whenever a sending UI opens, at most once a minute.
+            if (deep || _peers.IsEmpty || DateTime.UtcNow - _lastScan > TimeSpan.FromSeconds(60))
+            { _lastScan = DateTime.UtcNow; await Scan(reveal); }
         });
     }
 
+    DateTime _lastScan = DateTime.MinValue;
+
     async Task Scan(bool reveal)
     {
+        Log.Write($"subnet scan on {string.Join(", ", LocalIPv4())}");
         var hosts = LocalIPv4().SelectMany(ip =>
         {
             var b = ip.GetAddressBytes();
@@ -290,6 +317,7 @@ public sealed class Engine
         // Same address, different identity (device was reset/reinstalled): drop the stale entry.
         foreach (var old in _peers.Values.Where(o => o.Id != p.Id && o.Host == p.Host && o.Port == p.Port).ToList())
             _peers.TryRemove(old.Id, out _);
+        if (!_peers.ContainsKey(p.Id)) Log.Write($"device {p.Alias} ({p.DeviceModel ?? "?"}, id {p.Id[..8]}) at {host}:{p.Port}");
         _peers[p.Id] = p;
         Changed?.Invoke();
         return p;
@@ -297,6 +325,7 @@ public sealed class Engine
 
     void OnMulticast(DeviceInfo info, string ip)
     {
+        if (info.Fingerprint != Fingerprint && !_peers.ContainsKey(info.Fingerprint ?? "")) Log.Write($"multicast from {info.Alias} at {ip}");
         var p = Ingest(info, ip);
         if (p == null || !info.IsAnnouncement || !IsDiscoverable(info.Fingerprint)) return;
         _ = Task.Run(async () => { if (await Register(p.BaseUrl, probe: true) == null) SendMulticast(Me(false)); });
@@ -576,7 +605,7 @@ public sealed class Engine
             resp = await _http.PostAsync($"{peer.BaseUrl}/api/localsend/v2/prepare-upload", body, waitCts.Token);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception e) { throw new TransferException(Phase.Failed, e.Message); }
+        catch (Exception e) { Log.Write($"send to {peer.Alias} failed: {e.Message}"); throw new TransferException(Phase.Failed, e.Message); }
         switch ((int)resp.StatusCode)
         {
             case 200: break;
