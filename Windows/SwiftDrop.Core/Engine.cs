@@ -181,32 +181,36 @@ public sealed class Engine
         if (card.Fingerprint == Fingerprint) return;
         if (address != 0 && card.Caps.Contains("wake")) _wakeable[card.Fingerprint] = (address, DateTime.UtcNow);
         if (_peers.ContainsKey(card.Fingerprint)) return;
+        var reveal = IsDiscoverable(null);
         foreach (var ip in card.Ips)
             foreach (var scheme in new[] { card.Scheme, card.Scheme == "https" ? "http" : "https" })
-                if (await Register($"{scheme}://{ip}:{card.Port}", probe: true) is { } info) { Ingest(info, ip, card.Port, scheme); return; }
+                if ((reveal ? await Register($"{scheme}://{ip}:{card.Port}", probe: true) : (await InfoWithCode($"{scheme}://{ip}:{card.Port}")).info) is { } info)
+                { Ingest(info, ip, card.Port, scheme); return; }
     }
 
     /// Call while a sending UI is visible.
     public void Refresh(bool deep = false)
     {
-        _browsingUntil = DateTime.UtcNow.AddMinutes(2);
         JoinGroups();
-        SendMulticast(Me(true));
+        var reveal = IsDiscoverable(null);            // hidden devices never introduce themselves
+        if (reveal) SendMulticast(Me(true));
         _ = Task.Run(async () =>
         {
             await Task.WhenAll(_peers.Values.ToList().Select(async p =>
             {
-                if (await Register(p.BaseUrl, probe: false) != null) { _misses.TryRemove(p.Id, out _); return; }
+                var (info, code) = reveal ? await RegisterWithCode(p.BaseUrl) : await InfoWithCode(p.BaseUrl);
+                if (info != null) { _misses.TryRemove(p.Id, out _); return; }
+                if (code == 403) { _peers.TryRemove(p.Id, out _); _wakeable.TryRemove(p.Id, out _); Changed?.Invoke(); return; }  // hidden now
                 // Two consecutive misses before a device disappears (slow Wi-Fi / sleeping phones).
                 var sleeping = _wakeable.TryGetValue(p.Id, out var wk) && DateTime.UtcNow - wk.seen < TimeSpan.FromMinutes(15);
                 if (_misses.AddOrUpdate(p.Id, 1, (_, n) => n + 1) >= 2 && !TransferOf(p.Id).phase.IsActive() && !sleeping)
                 { _peers.TryRemove(p.Id, out _); _misses.TryRemove(p.Id, out _); Changed?.Invoke(); }
             }));
-            if (deep || _peers.IsEmpty) await Scan();
+            if (deep || _peers.IsEmpty) await Scan(reveal);
         });
     }
 
-    async Task Scan()
+    async Task Scan(bool reveal)
     {
         var hosts = LocalIPv4().SelectMany(ip =>
         {
@@ -220,7 +224,8 @@ public sealed class Engine
             try
             {
                 foreach (var scheme in new[] { "https", "http" })
-                    if (await Register($"{scheme}://{h}:{LS.Port}", probe: true) is { } info) { Ingest(info, h, LS.Port, scheme); break; }
+                    if ((reveal ? await Register($"{scheme}://{h}:{LS.Port}", probe: true) : (await InfoWithCode($"{scheme}://{h}:{LS.Port}")).info) is { } info)
+                    { Ingest(info, h, LS.Port, scheme); break; }
             }
             finally { gate.Release(); }
         }));
@@ -238,6 +243,29 @@ public sealed class Engine
         catch { return null; }
     }
 
+    async Task<(DeviceInfo? info, int code)> RegisterWithCode(string baseUrl)
+    {
+        try
+        {
+            var content = new StringContent(JsonSerializer.Serialize(Me(), LS.Json), Encoding.UTF8, "application/json");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var resp = await _http.PostAsync($"{baseUrl}/api/localsend/v2/register", content, cts.Token);
+            return (resp.IsSuccessStatusCode ? JsonSerializer.Deserialize<DeviceInfo>(await resp.Content.ReadAsStringAsync(), LS.Json) : null, (int)resp.StatusCode);
+        }
+        catch { return (null, -1); }
+    }
+
+    /// Read a device's info without introducing ourselves (used while receiving is off).
+    async Task<(DeviceInfo? info, int code)> InfoWithCode(string baseUrl)
+    {
+        try
+        {
+            using var resp = await _probe.GetAsync($"{baseUrl}/api/localsend/v2/info");
+            return (resp.IsSuccessStatusCode ? JsonSerializer.Deserialize<DeviceInfo>(await resp.Content.ReadAsStringAsync(), LS.Json) : null, (int)resp.StatusCode);
+        }
+        catch { return (null, -1); }
+    }
+
     /// Add a peer by address (useful when multicast is blocked).
     public async Task<Peer?> AddManual(string host, int port = LS.Port)
     {
@@ -251,6 +279,9 @@ public sealed class Engine
         if (string.IsNullOrEmpty(info.Fingerprint) || info.Fingerprint == Fingerprint) return null;
         var p = new Peer(info.Fingerprint, info.Alias, info.DeviceModel, info.DeviceType, host,
                          port ?? info.Port ?? LS.Port, scheme ?? info.Protocol ?? "https");
+        // Same address, different identity (device was reset/reinstalled): drop the stale entry.
+        foreach (var old in _peers.Values.Where(o => o.Id != p.Id && o.Host == p.Host && o.Port == p.Port).ToList())
+            _peers.TryRemove(old.Id, out _);
         _peers[p.Id] = p;
         Changed?.Invoke();
         return p;
@@ -266,7 +297,7 @@ public sealed class Engine
     // ------------------------------------------------------------ policy
 
     public bool IsFavorite(string? id) => id != null && Settings.Favorites.ContainsKey(id);
-    public bool IsDiscoverable(string? id) => DateTime.UtcNow < _browsingUntil || Settings.Mode switch
+    public bool IsDiscoverable(string? id) => Settings.Mode switch
     {
         ReceiveMode.Everyone => true, ReceiveMode.Favorites => IsFavorite(id), _ => false,
     };

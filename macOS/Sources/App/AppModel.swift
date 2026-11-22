@@ -18,7 +18,7 @@ final class AppModel: ObservableObject, TransportHost {
     @Published var receiveMode: ReceiveMode {
         didSet {
             UserDefaults.standard.set(receiveMode.rawValue, forKey: Keys.mode)
-            if receiveMode != .off { transports.forEach { $0.refresh(deep: false) } }
+            transports.forEach { $0.refresh(deep: false) }   // applies visibility immediately
         }
     }
     /// The main switch (Control Center style). Restores the last "on" mode.
@@ -106,7 +106,6 @@ final class AppModel: ObservableObject, TransportHost {
     func isFavorite(_ id: String?) -> Bool { id.map { fid in favorites.contains { $0.id == fid } } ?? false }
 
     func isDiscoverable(by peerID: String?) -> Bool {
-        if Date() < sendingUIActiveUntil { return true }
         switch receiveMode {
         case .everyone: return true
         case .favorites: return isFavorite(peerID)

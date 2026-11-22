@@ -40,6 +40,7 @@ final class ShareModel: ObservableObject, TransportHost {
     private var tasks: [String: Task<Void, Never>] = [:]
 
     let deviceName = UserDefaults.standard.string(forKey: "deviceName") ?? UIDevice.current.name
+    let receiveMode: ReceiveMode = .off   // the share sheet only sends
     var saveDirectory: URL { FileManager.default.temporaryDirectory }
 
     func start() {
@@ -117,7 +118,7 @@ final class ShareModel: ObservableObject, TransportHost {
     func cancelAll() { tasks.values.forEach { $0.cancel() } }
 
     // MARK: TransportHost (send-only)
-    func isDiscoverable(by peerID: String?) -> Bool { true }
+    func isDiscoverable(by peerID: String?) -> Bool { false }
     func canReceive(from peerID: String) -> Bool { false }
     func transportDidUpdate(_ peer: Peer) {
         if let i = peers.firstIndex(where: { $0.id == peer.id }) { peers[i] = peer }

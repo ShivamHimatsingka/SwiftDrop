@@ -10,19 +10,40 @@ enum TLSIdentityStore {
     private static let label = "SwiftDrop TLS"
     private static let keyTag = Data("com.swiftdrop.tls.key".utf8)
 
+    /// Readable while the phone is locked (after the first unlock since boot), so a background
+    /// relaunch for a Bluetooth knock can still use our identity.
+    private static let accessible = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+
+    /// Our long-lived identity. Returns nil only if the Keychain can't be read right now
+    /// (phone restarted and not unlocked yet). In that case nothing is created or deleted,
+    /// so the identity — and how other devices know this iPhone — never changes.
     static func loadOrCreate() -> (identity: SecIdentity, fingerprint: String)? {
-        guard let id = existing() ?? create(), canSign(id.0) else {
-            NSLog("SwiftDrop: TLS identity unavailable (Keychain); falling back to HTTP")
+        let q: [String: Any] = [kSecClass as String: kSecClassIdentity, kSecAttrLabel as String: label,
+                                kSecReturnRef as String: true]
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        switch status {
+        case errSecSuccess:
+            let identity = out as! SecIdentity
+            migrateAccessibility()
+            guard let fp = fingerprint(of: identity) else { return nil }
+            SDLog.log("TLS identity loaded (\(fp.prefix(8)))")
+            return (identity, fp)
+        case errSecItemNotFound:
+            guard let created = create() else { SDLog.log("TLS identity: creation failed"); return nil }
+            SDLog.log("TLS identity created (\(created.1.prefix(8)))")
+            return created
+        default:
+            SDLog.log("TLS identity not readable yet (status \(status)); waiting for unlock")
             return nil
         }
-        return id
     }
 
-    /// The key must be usable for signing, or TLS handshakes would stall.
-    private static func canSign(_ identity: SecIdentity) -> Bool {
-        var key: SecKey?
-        guard SecIdentityCopyPrivateKey(identity, &key) == errSecSuccess, let key else { return false }
-        return SecKeyCreateSignature(key, .ecdsaSignatureMessageX962SHA256, Data("probe".utf8) as CFData, nil) != nil
+    /// Identities created by older builds were "when unlocked" only.
+    private static func migrateAccessibility() {
+        let update = [kSecAttrAccessible as String: accessible] as CFDictionary
+        SecItemUpdate([kSecClass as String: kSecClassKey, kSecAttrApplicationTag as String: keyTag] as CFDictionary, update)
+        SecItemUpdate([kSecClass as String: kSecClassCertificate, kSecAttrLabel as String: label] as CFDictionary, update)
     }
 
     private static func fingerprint(of identity: SecIdentity) -> String? {
@@ -51,7 +72,8 @@ enum TLSIdentityStore {
             kSecAttrKeySizeInBits as String: 256,
             kSecPrivateKeyAttrs as String: [kSecAttrIsPermanent as String: true,
                                             kSecAttrApplicationTag as String: keyTag,
-                                            kSecAttrLabel as String: label],
+                                            kSecAttrLabel as String: label,
+                                            kSecAttrAccessible as String: accessible],
         ]
         var err: Unmanaged<CFError>?
         guard let priv = SecKeyCreateRandomKey(attrs as CFDictionary, &err),
@@ -65,7 +87,7 @@ enum TLSIdentityStore {
         let certDER = DER.seq([tbs, DER.ecdsaSHA256, DER.bitString(sig)])
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else { return nil }
         let add: [String: Any] = [kSecClass as String: kSecClassCertificate, kSecValueRef as String: cert,
-                                  kSecAttrLabel as String: label]
+                                  kSecAttrLabel as String: label, kSecAttrAccessible as String: accessible]
         let st = SecItemAdd(add as CFDictionary, nil)
         guard st == errSecSuccess || st == errSecDuplicateItem else { return nil }
         return existing()

@@ -62,8 +62,16 @@ object Client {
         } finally { c.disconnect() }
     }
 
-    fun probe(host: String, port: Int, me: DeviceInfo): Pair<DeviceInfo, String>? {
+    /** Read a device's info without introducing ourselves (used while receiving is off). */
+    fun getInfo(baseUrl: String): DeviceInfo? = runCatching {
+        val c = open("$baseUrl/api/localsend/v2/info", 1500)
+        try { if (c.responseCode == 200) DeviceInfo.from(JSONObject(c.inputStream.readBytes().toString(Charsets.UTF_8))) else null }
+        finally { c.disconnect() }
+    }.getOrNull()
+
+    fun probe(host: String, port: Int, me: DeviceInfo, reveal: Boolean = true): Pair<DeviceInfo, String>? {
         for (scheme in listOf("https", "http")) {
+            if (!reveal) { getInfo("$scheme://$host:$port")?.let { return it to scheme }; continue }
             val r = runCatching { postJson("$scheme://$host:$port/api/localsend/v2/register", me.toJson(), 1500) }.getOrNull()
             if (r?.first == 200) return runCatching { DeviceInfo.from(JSONObject(r.second)) to scheme }.getOrNull()
         }

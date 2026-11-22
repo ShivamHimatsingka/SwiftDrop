@@ -150,7 +150,7 @@ object Engine {
         io.execute {
             val me = me()
             for (ip in card.ips) {
-                val hit = Client.probe(ip, card.port, me)
+                val hit = Client.probe(ip, card.port, me, isDiscoverable(null))
                 if (hit != null) { ingest(hit.first, ip, card.port, hit.second); return@execute }
             }
             if ("wfd" in card.caps && wifiDirect?.supported == true) {
@@ -167,12 +167,20 @@ object Engine {
         browsingUntil = System.currentTimeMillis() + 120_000
         ble?.refresh()
         discovery?.joinAll()
-        discovery?.send(me(true))
+        val reveal = isDiscoverable(null)          // hidden devices never introduce themselves
+        if (reveal) discovery?.send(me(true))
         val known = peers.value.filter { it.hasLan }
         io.execute {
             known.forEach { p -> io.execute {
-                val ok = runCatching { Client.postJson("${p.baseUrl}/api/localsend/v2/register", me().toJson(), 4000) }.getOrNull()?.first == 200
-                if (ok) misses.remove(p.id)
+                val code = runCatching {
+                    if (reveal) Client.postJson("${p.baseUrl}/api/localsend/v2/register", me().toJson(), 4000).first
+                    else Client.getInfo(p.baseUrl)?.let { 200 } ?: -1
+                }.getOrNull()
+                if (code == 200) misses.remove(p.id)
+                else if (code == 403) {                    // they turned receiving off: hide now
+                    misses.remove(p.id); wakeable.remove(p.id)
+                    peers.update { l -> l.filterNot { it.id == p.id } }
+                }
                 // Drop only after two consecutive misses, so a slow handshake doesn't hide a nearby device.
                 else if ((misses.merge(p.id, 1, Int::plus) ?: 0) >= 2 &&
                          (wakeable[p.id]?.second ?: 0) < System.currentTimeMillis() - 15 * 60_000) {
@@ -180,19 +188,19 @@ object Engine {
                     peers.update { l -> if (transfers.value[p.id]?.first?.active == true) l else l.filterNot { it.id == p.id } }
                 }
             } }
-            if (deep || peers.value.isEmpty()) scan()
+            if (deep || peers.value.isEmpty()) scan(reveal)
         }
     }
 
-    private fun scan() {
+    private fun scan(reveal: Boolean) {
         val pool = Executors.newFixedThreadPool(64)
         val me = me()
-        for (h in Discovery.subnetHosts()) pool.execute { Client.probe(h, LS.PORT, me)?.let { (info, sch) -> ingest(info, h, LS.PORT, sch) } }
+        for (h in Discovery.subnetHosts()) pool.execute { Client.probe(h, LS.PORT, me, reveal)?.let { (info, sch) -> ingest(info, h, LS.PORT, sch) } }
         pool.shutdown(); pool.awaitTermination(20, TimeUnit.SECONDS)
     }
 
     fun isFavorite(id: String?) = id != null && favorites.value.containsKey(id)
-    fun isDiscoverable(id: String?) = System.currentTimeMillis() < browsingUntil || when (mode.value) {
+    fun isDiscoverable(id: String?) = when (mode.value) {
         ReceiveMode.EVERYONE -> true; ReceiveMode.FAVORITES -> isFavorite(id); ReceiveMode.OFF -> false }
     private fun canReceive(id: String) = when (mode.value) {
         ReceiveMode.EVERYONE -> true; ReceiveMode.FAVORITES -> isFavorite(id); ReceiveMode.OFF -> false }
@@ -207,7 +215,9 @@ object Engine {
         if (!::fingerprint.isInitialized || info.fingerprint == fingerprint || info.fingerprint.isEmpty()) return null
         val p = Peer(info.fingerprint, info.alias, info.deviceModel, info.deviceType, host,
             port ?: info.port ?: LS.PORT, sch ?: info.protocol ?: "https")
-        peers.update { l -> (l.filterNot { it.id == p.id } + p).sortedWith(compareBy({ !isFavorite(it.id) }, { it.alias.lowercase() })) }
+        // Same address, different identity (device was reset/reinstalled): drop the stale entry.
+        peers.update { l -> (l.filterNot { it.id == p.id || (it.host == p.host && it.port == p.port && it.hasLan) } + p)
+            .sortedWith(compareBy({ !isFavorite(it.id) }, { it.alias.lowercase() })) }
         return p
     }
 

@@ -86,7 +86,7 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
 ### Receiving modes (all platforms)
 - **Everyone**: anyone nearby can see you and send you an Accept request.
 - **Favorites Only**: only devices you've starred can see you. Right-click (Mac/Windows) or long-press (phones) a device ▸ *Add to Favorites*. Turn on *Auto-accept* for your own devices and their files arrive with no prompt.
-- **Off**: you're invisible, except for 2 minutes while you're sending something yourself.
+- **Off**: you're invisible to everyone, like AirDrop's *Receiving Off*. You can still send.
 
 ### Waking a locked iPhone
 - **From a Mac:** always works.
@@ -183,7 +183,8 @@ docs/           NativeReceiving.md — the plan for receiving with nothing insta
 ## Tested
 **Mac ↔ real iPhone (iPhone SE, iOS):** Bluetooth discovery (the Mac read the iPhone's card within 2.5 s), and 300 MB
 transfers in both directions over the direct link and over normal Wi‑Fi, and Bluetooth wake-up of a locked iPhone
-(knock delivered in 0.5 s; transfer finished 6 s after the knock, including the tap). Every file was byte-identical, and
+(knock delivered in 2 s, notification posted on the Lock Screen, transfer finished 19 s after sending including the
+tap, over the direct link). Receiving Off verified on the Mac (403 to probes, no network advertisement). Every file was byte-identical, and
 interface byte counters confirmed which link carried each transfer. Android Wi‑Fi Direct and Windows Bluetooth are
 built but untested on hardware.
 

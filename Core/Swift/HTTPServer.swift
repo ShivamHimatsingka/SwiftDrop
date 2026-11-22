@@ -11,6 +11,8 @@ final class HTTPServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "swiftdrop.http", qos: .userInitiated, attributes: .concurrent)
     private let handler: Handler
     var onFailure: (@Sendable (String) -> Void)?
+    /// The system tore the listener down (iOS, app paused). Restart when back in the foreground.
+    var onDefunct: (@Sendable () -> Void)?
 
     init(handler: @escaping Handler) { self.handler = handler }
 
@@ -50,10 +52,22 @@ final class HTTPServer: @unchecked Sendable {
             guard let self else { conn.cancel(); return }
             HTTPConnection(conn, queue: self.queue, handler: self.handler).start()
         }
-        l.stateUpdateHandler = { [weak self] state in
-            if case .failed(let err) = state {
-                self?.onFailure?("Port \(port): \(err.localizedDescription)")
+        l.stateUpdateHandler = { [weak self, weak l] state in
+            switch state {
+            case .ready: SDLog.log("listener on \(port) ready")
+            case .waiting(let e): SDLog.log("listener on \(port) waiting: \(e)")
+            case .failed(let e): SDLog.log("listener on \(port) failed: \(e)")
+            default: break
             }
+            guard let self, case .failed(let err) = state, let l, l === self.listener else { return }  // ignore old listeners
+            // iOS tears listeners down while the app is paused ("DefunctConnection"); the app
+            // restarts it on resume, so that's not an error worth showing.
+            if "\(err)".contains("Defunct") || "\(err)".contains("-65569") {
+                SDLog.log("listener on \(port) was shut down while paused")
+                self.onDefunct?()
+                return
+            }
+            self.onFailure?("Port \(port): \(err.localizedDescription)")
         }
         listener = l
         l.start(queue: queue)
@@ -62,9 +76,17 @@ final class HTTPServer: @unchecked Sendable {
     /// Show/hide the Bonjour (and peer-to-peer) advertisement, e.g. when receiving is turned off.
     func setService(_ service: NWListener.Service?) { listener?.service = service }
 
-    func stop() {
-        listener?.cancel()
+    func stop(then: (@Sendable () -> Void)? = nil) {
+        onFailure = nil; onDefunct = nil
+        guard let l = listener else { then?(); return }
         listener = nil
+        if let then {
+            // Call back once the port is really released (or after 1 s at most).
+            let once = OnceFlag()
+            l.stateUpdateHandler = { state in if case .cancelled = state { once.run(then) } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { once.run(then) }
+        }
+        l.cancel()
     }
 }
 
@@ -333,4 +355,9 @@ final class HTTPConnection: @unchecked Sendable {
         data.append(r.body)
         try await sendRaw(data)
     }
+}
+
+final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock(); private var done = false
+    func run(_ f: () -> Void) { lock.lock(); let go = !done; done = true; lock.unlock(); if go { f() } }
 }

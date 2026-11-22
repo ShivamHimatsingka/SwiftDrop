@@ -132,11 +132,22 @@ final class LocalSendClient: NSObject, URLSessionDataDelegate, @unchecked Sendab
         _ = try? await session.data(for: req)
     }
 
-    /// Probe one host the way LocalSend's HTTP fallback discovery does.
-    func probe(host: String, port: Int, me: LSDeviceInfo) async -> (LSDeviceInfo, String)? {
+    /// Read a device's info without introducing ourselves (used while we're hidden).
+    func info(base: URL) async throws -> LSDeviceInfo {
+        let req = URLRequest(url: url(base, "/api/localsend/v2/info"), timeoutInterval: 1.6)
+        let (data, resp) = try await probeSession.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard code == 200 else { throw TransferError.server(code) }
+        return try JSONDecoder().decode(LSDeviceInfo.self, from: data)
+    }
+
+    /// Probe one host the way LocalSend's HTTP fallback discovery does. When `reveal` is false
+    /// (receiving off) we only read their info, so they don't learn about us.
+    func probe(host: String, port: Int, me: LSDeviceInfo, reveal: Bool = true) async -> (LSDeviceInfo, String)? {
         for scheme in ["https", "http"] {
             let base = URL(string: "\(scheme)://\(host):\(port)")!
-            if let info = try? await register(base: base, me: me, probe: true) { return (info, scheme) }
+            if reveal, let info = try? await register(base: base, me: me, probe: true) { return (info, scheme) }
+            if !reveal, let info = try? await info(base: base) { return (info, scheme) }
         }
         return nil
     }

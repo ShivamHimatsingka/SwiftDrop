@@ -94,6 +94,7 @@ enum TransferError: LocalizedError {
 @MainActor protocol TransportHost: AnyObject {
     var deviceName: String { get }
     var saveDirectory: URL { get }
+    var receiveMode: ReceiveMode { get }
     /// Whether we should answer discovery from this device.
     func isDiscoverable(by peerID: String?) -> Bool
     /// Whether incoming transfers from this device are allowed at all (receive mode).

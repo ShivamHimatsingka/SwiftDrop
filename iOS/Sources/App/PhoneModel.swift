@@ -48,14 +48,27 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     // MARK: Lifecycle
 
+    private var waitingForUnlock: NSObjectProtocol?
+
     func start() {
         guard transport == nil else { return }
+        // Never fall back to a different identity: wait until the Keychain is readable.
+        guard let tls = TLSIdentityStore.loadOrCreate() else {
+            if waitingForUnlock == nil {
+                waitingForUnlock = NotificationCenter.default.addObserver(
+                    forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.start() }
+                }
+            }
+            return
+        }
+        if let w = waitingForUnlock { NotificationCenter.default.removeObserver(w); waitingForUnlock = nil }
         let port = UInt16(UserDefaults.standard.integer(forKey: "SwiftDropPort"))
         let idiom = UIDevice.current.userInterfaceIdiom
         let cfg = LocalSendConfig(port: port == 0 ? LocalSendConstants.port : port,
                                   deviceModel: idiom == .pad ? "iPad" : "iPhone",
                                   deviceType: "mobile",
-                                  tls: TLSIdentityStore.loadOrCreate(), wakeable: true)
+                                  tls: tls, wakeable: true)
         let t = LocalSendTransport(config: cfg)
         t.onWake = { [weak self] knock in Task { @MainActor in self?.knocked(knock) } }
         transport = t
@@ -87,12 +100,15 @@ final class PhoneModel: ObservableObject, TransportHost {
     }
 
     func didBecomeActive() {
+        if statusMessage?.contains("Port") == true { statusMessage = nil }
         if wasBackgrounded { wasBackgrounded = false; transport?.resumeAfterBackground() } else { refresh() }
     }
 
     /// A Mac, PC or phone knocked over Bluetooth while we were paused (or not running).
     private func knocked(_ k: BLEWake) {
-        guard canReceive(from: k.f) else { return }
+        guard canReceive(from: k.f) else {
+            SDLog.log("knock ignored: receiving is \(receiveMode.rawValue) and \(k.a) isn't allowed"); return
+        }
         if UIApplication.shared.applicationState == .active { refresh(); return }   // already listening
         notify(id: "knock-\(k.f)", body: "“\(k.a)” wants to send \(k.n). Tap to receive.", fingerprint: k.f)
     }
@@ -106,7 +122,13 @@ final class PhoneModel: ObservableObject, TransportHost {
         content.sound = .default
         content.threadIdentifier = "swiftdrop"
         if let fingerprint { content.userInfo = ["fp": fingerprint] }
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            SDLog.log("notification '\(id.prefix(6))': authorization \(settings.authorizationStatus.rawValue) (2 = allowed), lock screen \(settings.lockScreenSetting.rawValue) (2 = on), alerts \(settings.alertSetting.rawValue)")
+        }
+        center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
+            SDLog.log(error.map { "notification failed: \($0.localizedDescription)" } ?? "notification posted")
+        }
     }
 
     private var inBackground: Bool { UIApplication.shared.applicationState != .active }
@@ -132,11 +154,9 @@ final class PhoneModel: ObservableObject, TransportHost {
     private var browsingUntil = Date.distantPast
 
     func isDiscoverable(by peerID: String?) -> Bool {
-        if Date() < browsingUntil { return true }
         switch receiveMode {
         case .everyone: return true
-        // Keep advertising (Bluetooth) so favourites can find and wake us; only favourites get answers.
-        case .favorites: return peerID == nil || isFavorite(peerID)
+        case .favorites: return isFavorite(peerID)   // Bluetooth still advertises so favourites can wake us
         case .off: return false
         }
     }

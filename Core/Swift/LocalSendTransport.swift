@@ -119,19 +119,38 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         pathMonitor?.cancel()
     }
 
-    /// iOS: after the app was paused, restart the listener (the system may have torn it down).
+    /// iOS: after the app was paused, restart the listener (iOS tears it down while paused).
+    /// Wait for the old one to release the port first, and retry if the port is still busy.
     @MainActor func resumeAfterBackground() {
-        guard let host else { return }
-        server?.stop()
+        let old = server
+        server = nil
+        old?.stop { [weak self] in Task { @MainActor in self?.startListener(attempt: 1) } } ?? startListener(attempt: 1)
+        refresh(deep: false)
+    }
+
+    @MainActor private func startListener(attempt: Int) {
+        guard let host, server == nil || attempt > 1 else { return }
         let p2p = config.directLink && DirectLinkPreference.current != .off
         let server = HTTPServer { [weak self] req in await self?.route(req) ?? .notFound }
+        server.onFailure = { [weak self, weak host] msg in
+            Task { @MainActor in
+                guard let self else { return }
+                if attempt < 5 {                       // port not released yet: try again shortly
+                    SDLog.log("listener restart attempt \(attempt) failed (\(msg)); retrying")
+                    try? await Task.sleep(for: .milliseconds(400 * attempt))
+                    self.server?.stop(); self.server = nil
+                    self.startListener(attempt: attempt + 1)
+                } else { host?.transportDidFail(msg) }
+            }
+        }
         do {
             try server.start(port: config.port, tlsIdentity: tlsIdentity, peerToPeer: p2p,
                              service: p2p && config.advertise && visibleCache ? bonjourService() : nil)
-            SDLog.log("listener restarted after background")
-        } catch { host.transportDidFail("Could not listen on port \(config.port)") }
+            SDLog.log("listener restarted after background (attempt \(attempt))")
+        } catch {
+            host.transportDidFail("Could not listen on port \(config.port)")
+        }
         self.server = server
-        refresh(deep: false)
     }
 
     @MainActor func setAlias(_ alias: String) {
@@ -141,6 +160,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
 
     @MainActor private func announceIfVisible() {
         let visible = host?.isDiscoverable(by: nil) == true
+        receiveOff = host?.receiveMode == .off
         if visible != visibleCache {
             visibleCache = visible
             if config.advertise && config.directLink { server?.setService(visible ? bonjourService() : nil) }
@@ -172,8 +192,12 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
                                               type: config.deviceType, scheme: scheme, port: Int(config.port)))
     }
 
+    private var receiveOff = false                         // cached host.receiveMode == .off
+
     private func bleCard() -> BLECard? {
-        guard visibleCache, config.advertise else { return nil }
+        // Everyone: visible. Favorites: still advertise so favourites can wake us (only they get
+        // answers over Wi‑Fi). Off: nothing.
+        guard config.advertise, visibleCache || (config.wakeable && !receiveOff) else { return nil }
         var caps = config.directLink && DirectLinkPreference.current != .off ? ["awdl"] : []
         if config.wakeable { caps.append("wake") }
         return BLECard(a: alias, f: fingerprint, m: config.deviceModel, t: config.deviceType, p: Int(config.port),
@@ -190,10 +214,11 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         }
         guard stateLock.withLock({ knownPeers[card.f]?.hasLAN != true }) else { return }
         let me = myInfo(announce: nil)
+        let reveal = visibleCache
         Task.detached { [weak self] in
             guard let self else { return }
             for ip in card.ip {
-                if let (info, scheme) = await self.client.probe(host: ip, port: card.p, me: me) {
+                if let (info, scheme) = await self.client.probe(host: ip, port: card.p, me: me, reveal: reveal) {
                     self.ingest(info, host: ip, port: card.p, scheme: scheme); return
                 }
             }
@@ -234,10 +259,9 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         announceIfVisible()          // the host reports "visible" while a sending screen is open
         ble.refresh()
         browseDirectLinks()
-        // …and re-check once that window has passed, so "Receiving Off" really goes dark again.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 125) { [weak self] in self?.announceIfVisible() }
         discovery.joinGroups()
-        discovery.send(myInfo(announce: true))
+        let reveal = visibleCache                      // hidden devices never introduce themselves
+        if reveal { discovery.send(myInfo(announce: true)) }
         let peers = stateLock.withLock { Array(knownPeers.values.filter(\.hasLAN)) }
         let me = myInfo(announce: nil)
         Task.detached { [weak self] in
@@ -246,21 +270,26 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             await withTaskGroup(of: Void.self) { group in
                 for p in peers {
                     group.addTask {
-                        if let info = try? await self.client.register(base: p.baseURL, me: me, probe: true) {
+                        do {
+                            let info = reveal ? try await self.client.register(base: p.baseURL, me: me, probe: true)
+                                              : try await self.client.info(base: p.baseURL)
                             self.ingest(info, host: p.host, port: p.port, scheme: p.scheme)
-                        } else {
+                        } catch TransferError.server(403) {
+                            self.noteMiss(p.id, hidden: true)        // they turned receiving off
+                        } catch {
                             self.noteMiss(p.id)
                         }
                     }
                 }
             }
             let shouldScan = deep || self.stateLock.withLock { self.knownPeers.isEmpty }
-            if shouldScan { await self.scanSubnets(me: me) }
+            if shouldScan { await self.scanSubnets(me: me, reveal: reveal) }
         }
     }
 
-    private func noteMiss(_ peerID: String) {
+    private func noteMiss(_ peerID: String, hidden: Bool = false) {
         let drop: Bool = stateLock.withLock {
+            if hidden { knownPeers[peerID] = nil; missCount[peerID] = nil; wakeable.remove(peerID); return true }
             missCount[peerID, default: 0] += 1
             if missCount[peerID]! >= 2 {
                 missCount[peerID] = nil
@@ -277,7 +306,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     }
 
     /// HTTP fallback discovery for networks that drop multicast.
-    private func scanSubnets(me: LSDeviceInfo) async {
+    private func scanSubnets(me: LSDeviceInfo, reveal: Bool) async {
         let ownIPs = Set(IPv4Interface.all().map(\.addressString))
         let hosts = Array(Set(IPv4Interface.all().flatMap { $0.subnetHosts() }).subtracting(ownIPs))
         let port = Int(LocalSendConstants.port)   // peers use the protocol default
@@ -285,7 +314,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             await withTaskGroup(of: Void.self) { group in
                 for h in batch {
                     group.addTask {
-                        if let (info, scheme) = await self.client.probe(host: h, port: port, me: me) {
+                        if let (info, scheme) = await self.client.probe(host: h, port: port, me: me, reveal: reveal) {
                             self.ingest(info, host: h, port: port, scheme: scheme)
                         }
                     }
@@ -312,6 +341,13 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             missCount[p.id] = nil
             return p
         }
+        // Same address, different identity: the device reinstalled/reset — drop the stale entry.
+        let stale: [String] = peer.hasLAN ? stateLock.withLock {
+            let ids = knownPeers.values.filter { $0.id != peer.id && $0.host == peer.host && $0.port == peer.port }.map(\.id)
+            ids.forEach { knownPeers[$0] = nil; wakeable.remove($0) }
+            return ids
+        } : []
+        if !stale.isEmpty { Task { @MainActor [weak self] in stale.forEach { self?.host?.transportDidLose($0) } } }
         if !peer.hasLAN && peer.awdlService == nil { return nil }
         Task { @MainActor [weak self] in self?.host?.transportDidUpdate(peer) }
         return peer
