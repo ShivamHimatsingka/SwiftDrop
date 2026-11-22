@@ -19,10 +19,10 @@ final class ControlServer: @unchecked Sendable {
             let deep = req.query["deep"] == "1"
             let devices: [ControlDevice] = await MainActor.run {
                 let m = AppModel.shared
-                m.sendingUIDidAppear(deep: deep)
+                if deep { m.sendingUIDidAppear(deep: true) } else { m.sendingUIStillOpen() }
                 return m.peers.map {
                     ControlDevice(id: $0.id, alias: $0.alias, deviceType: $0.deviceType,
-                                  deviceModel: $0.deviceModel, isFavorite: m.isFavorite($0.id))
+                                  deviceModel: $0.deviceModel, isFavorite: m.isFavorite($0.id), asleep: $0.asleep)
                 }
             }
             return .json(devices)

@@ -375,7 +375,7 @@ struct ShareView: View {
                                 let p = state.phases[d.id]
                                 DeviceTile(alias: d.alias, deviceType: d.deviceType, deviceModel: d.deviceModel,
                                            phase: p?.phase ?? .idle, progress: p?.progress ?? 0,
-                                           isFavorite: d.isFavorite, size: 64) {
+                                           isFavorite: d.isFavorite, asleep: d.asleep ?? false, size: 64) {
                                     state.send(to: d)
                                 }
                                 .help(p?.message ?? d.alias)

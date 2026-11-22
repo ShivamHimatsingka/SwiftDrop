@@ -31,6 +31,8 @@ final class PhoneModel: ObservableObject, TransportHost {
     private var wasBackgrounded = false
     /// Senders whose "Tap to receive" notification was tapped: accept their next offer.
     private var consent: [String: Date] = [:]
+    /// Senders the user declined from the notification.
+    private var declined: [String: Date] = [:]
     private let notifications = NotificationHandler()
 
     private init() {
@@ -72,9 +74,16 @@ final class PhoneModel: ObservableObject, TransportHost {
         let t = LocalSendTransport(config: cfg)
         t.onWake = { [weak self] knock in Task { @MainActor in self?.knocked(knock) } }
         transport = t
-        notifications.onTap = { [weak self] fp in Task { @MainActor in self?.consent[fp] = Date().addingTimeInterval(120) } }
+        notifications.onAnswer = { [weak self] fp, accept in
+            await MainActor.run { self?.answered(fp, accept: accept) }
+        }
         UNUserNotificationCenter.current().delegate = notifications
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // AirDrop-style buttons on the Lock Screen; they run without unlocking or opening the app.
+        let accept = UNNotificationAction(identifier: "accept", title: "Accept", options: [])
+        let decline = UNNotificationAction(identifier: "decline", title: "Decline", options: [.destructive])
+        UNUserNotificationCenter.current().setNotificationCategories([
+            UNNotificationCategory(identifier: "incoming", actions: [accept, decline], intentIdentifiers: [], options: [])])
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .timeSensitive]) { _, _ in }
         SDLog.log("launched (\(UIApplication.shared.applicationState == .background ? "in background" : "foreground"))")
         t.start(host: self)
         // No scan here: a background relaunch (Bluetooth knock) should stay cheap. Discovery
@@ -110,17 +119,46 @@ final class PhoneModel: ObservableObject, TransportHost {
             SDLog.log("knock ignored: receiving is \(receiveMode.rawValue) and \(k.a) isn't allowed"); return
         }
         if UIApplication.shared.applicationState == .active { refresh(); return }   // already listening
-        notify(id: "knock-\(k.f)", body: "“\(k.a)” wants to send \(k.n). Tap to receive.", fingerprint: k.f)
+        notify(id: "knock-\(k.f)", body: "“\(k.a)” would like to share \(k.n).", fingerprint: k.f, incoming: true)
+    }
+
+    /// Accept / Decline pressed on the notification (or the notification tapped = accept).
+    /// Runs in the background: reopen the listener so the waiting sender can deliver (or hear "declined").
+    private func answered(_ fp: String, accept: Bool) {
+        SDLog.log("notification answered: \(accept ? "accept" : "decline")")
+        if accept { consent[fp] = Date().addingTimeInterval(120) } else { declined[fp] = Date().addingTimeInterval(120) }
+        guard inBackground else { return }          // in the foreground the listener is already up
+        beginBackgroundReceive()
+        transport?.resumeAfterBackground()
+    }
+
+    /// Keep running (≈30 s, iOS's limit) so a transfer accepted from the Lock Screen can finish.
+    private func beginBackgroundReceive() {
+        guard bgTask == .invalid else { return }
+        wasBackgrounded = true
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "SwiftDrop receive") { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.incoming?.phase == .receiving {
+                    self.notify(id: "finish", body: "Open SwiftDrop to finish receiving from “\(self.incoming?.offer.senderAlias ?? "")”.")
+                }
+                self.endBackgroundTask()
+            }
+        }
     }
 
     /// Lock-screen notification (standard "active" level: shown on the Lock Screen and
     /// Notification Centre with a sound, as long as SwiftDrop's notifications are allowed).
-    private func notify(id: String, body: String, fingerprint: String? = nil) {
+    private func notify(id: String, body: String, fingerprint: String? = nil, incoming: Bool = false) {
         let content = UNMutableNotificationContent()
         content.title = "SwiftDrop"
         content.body = body
         content.sound = .default
         content.threadIdentifier = "swiftdrop"
+        if incoming {
+            content.categoryIdentifier = "incoming"       // Accept / Decline buttons
+            content.interruptionLevel = .timeSensitive    // lights the screen, breaks through Focus
+        }
         if let fingerprint { content.userInfo = ["fp": fingerprint] }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
@@ -182,7 +220,8 @@ final class PhoneModel: ObservableObject, TransportHost {
 
     func transportShouldAccept(_ offer: IncomingOffer) async -> IncomingDecision {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["knock-\(offer.senderID)"])
-        if let until = consent.removeValue(forKey: offer.senderID), until > Date() {   // they tapped "Tap to receive"
+        if let until = declined.removeValue(forKey: offer.senderID), until > Date() { return .decline }
+        if let until = consent.removeValue(forKey: offer.senderID), until > Date() {   // Accept pressed / notification tapped
             let state = IncomingState(offer: offer)
             state.phase = .receiving
             incoming = state
@@ -388,14 +427,20 @@ extension TransferError {
     var isCancelled: Bool { if case .cancelled = self { return true }; return false }
 }
 
-/// Taps on "Tap to receive" notifications.
+/// Accept / Decline buttons and taps on SwiftDrop notifications.
 final class NotificationHandler: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
-    var onTap: ((String) -> Void)?
+    var onAnswer: ((String, Bool) async -> Void)?
     func userNotificationCenter(_ c: UNUserNotificationCenter, didReceive r: UNNotificationResponse,
                                 withCompletionHandler done: @escaping () -> Void) {
-        if let fp = r.notification.request.content.userInfo["fp"] as? String { onTap?(fp) }
-        done()
+        guard let fp = r.notification.request.content.userInfo["fp"] as? String else { done(); return }
+        let accept = r.actionIdentifier != "decline" && r.actionIdentifier != UNNotificationDismissActionIdentifier
+        Task {
+            await onAnswer?(fp, accept)   // starts the background receive before iOS suspends us again
+            done()
+        }
     }
     func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification,
-                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) { done([]) }
+                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound, .list])
+    }
 }

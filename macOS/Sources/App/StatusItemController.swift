@@ -53,6 +53,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     func showPopover() {
         guard let button = statusItem.button else { return }
         model.sendingUIDidAppear()
+        model.popoverVisible = true
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
@@ -62,6 +63,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     func closePopover() { popover.performClose(nil) }
 
     func popoverDidClose(_ notification: Notification) {
+        model.popoverVisible = false
         statusItem.button?.highlight(false)
     }
 

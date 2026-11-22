@@ -262,11 +262,35 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
         discovery.joinGroups()
         let reveal = visibleCache                      // hidden devices never introduce themselves
         if reveal { discovery.send(myInfo(announce: true)) }
-        let peers = stateLock.withLock { Array(knownPeers.values.filter(\.hasLAN)) }
-        let me = myInfo(announce: nil)
+        let started = Date()
         Task.detached { [weak self] in
             guard let self else { return }
-            // Re-validate known peers (LocalSend peers do not re-announce periodically).
+            await self.revalidate(reveal: reveal)
+            let shouldScan = deep || self.stateLock.withLock { self.knownPeers.isEmpty }
+            if shouldScan { await self.scanSubnets(me: self.myInfo(announce: nil), reveal: reveal) }
+            // Sleeping iPhones must show up on Bluetooth during this refresh; if not, they were
+            // closed (swiped away) or left — remove them.
+            try? await Task.sleep(for: .seconds(25))
+            let gone: [String] = self.stateLock.withLock {
+                let ids = self.knownPeers.values.filter { $0.asleep && (self.bleSeen[$0.id] ?? .distantPast) < started }.map(\.id)
+                ids.forEach { self.knownPeers[$0] = nil }
+                return ids
+            }
+            if !gone.isEmpty { await MainActor.run { gone.forEach { self.host?.transportDidLose($0) } } }
+        }
+    }
+
+    /// Cheap liveness check of known devices (no scanning): call every few seconds while a
+    /// sending screen is open so "online / Asleep / gone" stays current.
+    @MainActor func checkPeers() {
+        let reveal = visibleCache
+        Task.detached { [weak self] in await self?.revalidate(reveal: reveal) }
+    }
+
+    private func revalidate(reveal: Bool) async {
+        let peers = stateLock.withLock { Array(knownPeers.values.filter(\.hasLAN)) }
+        let me = myInfo(announce: nil)
+        do {
             await withTaskGroup(of: Void.self) { group in
                 for p in peers {
                     group.addTask {
@@ -282,8 +306,6 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
                     }
                 }
             }
-            let shouldScan = deep || self.stateLock.withLock { self.knownPeers.isEmpty }
-            if shouldScan { await self.scanSubnets(me: me, reveal: reveal) }
         }
     }
 
@@ -294,7 +316,13 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             if missCount[peerID]! >= 2 {
                 missCount[peerID] = nil
                 // Paused iPhone: still advertising over Bluetooth, so keep it listed (we can wake it).
-                if let seen = bleSeen[peerID], Date().timeIntervalSince(seen) < 600, wakeable.contains(peerID) { return false }
+                if let seen = bleSeen[peerID], Date().timeIntervalSince(seen) < 600, wakeable.contains(peerID) {
+                    if var p = knownPeers[peerID], !p.asleep {
+                        p.asleep = true; knownPeers[peerID] = p
+                        Task { @MainActor [weak self] in self?.host?.transportDidUpdate(p) }
+                    }
+                    return false
+                }
                 if var p = knownPeers[peerID], p.awdlService != nil {   // still reachable directly
                     p.host = ""; knownPeers[peerID] = p; return false
                 }

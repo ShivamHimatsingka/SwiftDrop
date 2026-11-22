@@ -96,7 +96,22 @@ final class AppModel: ObservableObject, TransportHost {
     /// Called whenever a sending surface (menu popover, share sheet) is visible.
     func sendingUIDidAppear(deep: Bool = false) {
         sendingUIActiveUntil = Date().addingTimeInterval(120)
+        lastFullRefresh = Date()
         transports.forEach { $0.refresh(deep: deep || peers.isEmpty) }
+    }
+
+    private var lastFullRefresh = Date.distantPast
+    private var lastCheck = Date.distantPast
+    /// True while the menu-bar popover is on screen (drives the live status timer).
+    var popoverVisible = false
+
+    /// Called repeatedly while a sending UI stays open: a full refresh at most every 30 s,
+    /// otherwise a cheap liveness check (online / Asleep / gone) every ~5 s.
+    func sendingUIStillOpen() {
+        if Date().timeIntervalSince(lastFullRefresh) > 30 { sendingUIDidAppear(); return }
+        guard Date().timeIntervalSince(lastCheck) > 4 else { return }
+        lastCheck = Date()
+        localSend?.checkPeers()
     }
 
     // MARK: TransportHost

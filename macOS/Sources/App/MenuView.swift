@@ -51,6 +51,9 @@ struct MenuView: View {
         .animation(.snappy(duration: 0.25), value: model.receiveMode)
         .animation(.snappy(duration: 0.25), value: model.peers.map(\.id))
         .onAppear { clipboard = model.clipboardSummary() }
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+            if model.popoverVisible { model.sendingUIStillOpen() }   // live online / Asleep status
+        }
     }
 
     private var separator: some View {
@@ -130,7 +133,7 @@ struct MenuView: View {
                         let t = model.transfer(for: peer.id)
                         DeviceTile(alias: peer.alias, deviceType: peer.deviceType, deviceModel: peer.deviceModel,
                                    phase: t?.phase ?? .idle, progress: t?.progress ?? 0,
-                                   isFavorite: model.isFavorite(peer.id), size: 50) {
+                                   isFavorite: model.isFavorite(peer.id), asleep: peer.asleep, size: 50) {
                             tap(peer)
                         }
                         .contextMenu { contextMenu(peer, transfer: t) }

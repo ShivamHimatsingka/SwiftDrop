@@ -138,6 +138,8 @@ struct DeviceTile: View {
     var phase: TransferPhase = .idle
     var progress: Double = 0
     var isFavorite: Bool = false
+    /// Locked iPhone: still sendable (it gets woken), shown dimmed with "Asleep".
+    var asleep: Bool = false
     var size: CGFloat = 64
     var action: () -> Void
 
@@ -149,6 +151,7 @@ struct DeviceTile: View {
                 DeviceAvatar(alias: alias, deviceType: deviceType, deviceModel: deviceModel,
                              phase: phase, progress: progress, isFavorite: isFavorite,
                              size: size, highlighted: hovering)
+                    .opacity(asleep && phase == .idle ? 0.55 : 1)
                 Text(alias)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(2)
@@ -172,7 +175,7 @@ struct DeviceTile: View {
 
     private var secondary: String {
         switch phase {
-        case .idle: return DeviceGlyph.caption(type: deviceType, model: deviceModel)
+        case .idle: return asleep ? "Asleep" : DeviceGlyph.caption(type: deviceType, model: deviceModel)
         case .sending where progress > 0: return "Sending… \(Int(progress * 100))%"
         default: return phase.label ?? ""
         }

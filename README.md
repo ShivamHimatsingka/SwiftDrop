@@ -79,7 +79,7 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
 | | To be **found and receive** | To **send** |
 |---|---|---|
 | **Mac** | SwiftDrop in the menu bar. Turn on *Settings ▸ Open at login* and you never think about it again. | Finder: right-click ▸ **Share ▸ SwiftDrop**. Or drag files, images or text onto the menu-bar icon. Or click the menu-bar icon ▸ click a person. |
-| **iPhone / iPad** | **Nothing on screen.** Open SwiftDrop once after installing or restarting the phone, then lock it or switch apps freely. When someone sends, a **"Tap to receive"** notification appears on the Lock Screen. Tap it and the transfer finishes. ⚠️ Don't swipe SwiftDrop away in the app switcher: a force-quit app can't be woken until you open it again. | Any app's **Share** button ▸ **SwiftDrop**. Or open SwiftDrop ▸ tap a person ▸ Photos / Files / Clipboard. |
+| **iPhone / iPad** | **Nothing on screen.** Open SwiftDrop once after installing or restarting the phone, then lock it or switch apps freely. When someone sends, an AirDrop-style notification appears on the Lock Screen: **"“Mac” would like to share …"**. Long-press it and tap **Accept** (no unlock needed; the file downloads in the background and you get "Received …"), or **Decline**. Tapping the notification itself opens SwiftDrop and accepts. ⚠️ Don't swipe SwiftDrop away in the app switcher: iOS never wakes a force-quit app. | Any app's **Share** button ▸ **SwiftDrop**. Or open SwiftDrop ▸ tap a person ▸ Photos / Files / Clipboard. |
 | **Android** | **Nothing.** After opening it once, SwiftDrop receives in the background and after reboots. Switch receiving on or off with the **SwiftDrop Quick Settings tile**. An Accept / Decline notification pops up for each transfer. | Any app's **Share** button ▸ **SwiftDrop**. Or open SwiftDrop ▸ tap a person. |
 | **Windows** | **Nothing.** SwiftDrop starts at sign-in and lives in the tray. A prompt appears above the tray for each transfer. | Explorer: right-click ▸ **Send with SwiftDrop** (Windows 11: *Show more options*). Or click the tray icon ▸ click a person, or drop files on the panel. |
 
@@ -88,10 +88,21 @@ dotnet swiftdrop.dll send 192.168.1.20 photo.jpg ~/Album  # send
 - **Favorites Only**: only devices you've starred can see you. Right-click (Mac/Windows) or long-press (phones) a device ▸ *Add to Favorites*. Turn on *Auto-accept* for your own devices and their files arrive with no prompt.
 - **Off**: you're invisible to everyone, like AirDrop's *Receiving Off*. You can still send.
 
+### Device status on the Mac
+While the menu-bar panel or Share sheet is open, the Mac re-checks devices every 5 seconds:
+- **Normal**: online.
+- **Dimmed, "Asleep"**: a locked iPhone. Clicking it sends and wakes it.
+- **Gone**: closed (swiped away) or out of range, removed within about 30 s.
+
 ### Waking a locked iPhone
 - **From a Mac:** always works.
 - **From Android or Windows:** works if that device has seen the iPhone with SwiftDrop *open* in about the last 15 minutes. A locked iPhone is invisible to non-Apple Bluetooth scans and changes its address. Otherwise you'll see "iPhone is asleep — open SwiftDrop on it".
 - **On the iPhone:** SwiftDrop's notifications must be allowed (Settings ▸ Notifications ▸ SwiftDrop), including *Lock Screen*.
+- **Background time:** iOS gives a woken app about 30 seconds, enough for files up to roughly a gigabyte over the direct link.
+  For bigger transfers you'll get "Open SwiftDrop to finish receiving".
+- **Lighting the screen through Focus / Sleep mode** needs Apple's *Time Sensitive* notification permission, which only
+  paid developer accounts can sign. With one, uncomment `CODE_SIGN_ENTITLEMENTS` in `iOS/project.yml` and run
+  `xcodegen`. With a free Apple ID, the alert behaves like a normal notification.
 
 ### Permissions each app asks for
 | | |
@@ -136,6 +147,7 @@ Connection events are logged to `~/Library/Logs/SwiftDrop/SwiftDrop.log` on the 
 
 ## Platform notes (honest limits)
 
+- **A swiped-away (force-quit) iPhone app can't receive.** iOS won't wake it for anything; only Apple's AirDrop is exempt.
 - **iPhone receiving while locked or in the background.** iOS pauses every app except AirDrop, so SwiftDrop can't
   listen on the network then. It keeps a Bluetooth service available instead (iOS allows that in the background).
   When a Mac can't reach the paused iPhone, it knocks over Bluetooth, and the iPhone shows

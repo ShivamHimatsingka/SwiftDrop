@@ -41,6 +41,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(SWIFTDROP_BUNDLE_PREFIX).ios
+        # Paid Apple Developer accounts: uncomment for Time Sensitive notifications (light up the
+        # screen and break through Focus). Free accounts can't sign this entitlement.
+        # CODE_SIGN_ENTITLEMENTS: Resources/SwiftDrop.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:

@@ -34,6 +34,7 @@ struct ControlDevice: Codable, Identifiable, Hashable, Sendable {
     let deviceType: String?
     let deviceModel: String?
     let isFavorite: Bool
+    var asleep: Bool? = nil
 }
 
 struct ControlSendRequest: Codable, Sendable {

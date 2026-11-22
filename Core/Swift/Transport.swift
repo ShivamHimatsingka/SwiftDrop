@@ -20,6 +20,8 @@ struct Peer: Identifiable, Hashable, Sendable {
     var lastSeen: Date
     /// Bonjour service name when reachable over Apple peer-to-peer Wi‑Fi (AWDL).
     var awdlService: String? = nil
+    /// Paused iPhone: not answering on Wi‑Fi but still advertising over Bluetooth (can be woken).
+    var asleep = false
 
     var hasLAN: Bool { !host.isEmpty }
     var baseURL: URL { URL(string: "\(scheme)://\(host.contains(":") ? "[\(host)]" : host):\(port)")! }
