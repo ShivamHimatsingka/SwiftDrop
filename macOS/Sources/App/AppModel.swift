@@ -172,6 +172,7 @@ final class AppModel: ObservableObject, TransportHost {
     }
 
     func transportIncomingFinished(_ offerID: String, files: [URL], error: String?) {
+        if let error { SDLog.log("receive \(offerID.prefix(8)) failed: \(error)") }
         guard let s = incoming, s.id == offerID else { return }
         s.files = files
         if let error {
@@ -250,6 +251,7 @@ final class AppModel: ObservableObject, TransportHost {
     private func finishTransfer(_ id: String, phase: TransferPhase, message: String?,
                                 payload: OutgoingPayload? = nil, peer: Peer? = nil) {
         guard var t = transfers[id] else { return }
+        if phase != .done { SDLog.log("transfer to \(peer?.alias ?? t.peerID) ended \(phase.rawValue): \(message ?? "-")") }
         t.phase = phase
         t.message = message
         if phase == .done { t.progress = 1 }

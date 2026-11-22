@@ -6,6 +6,7 @@
 	<key>CFBundleDisplayName</key><string>SwiftDrop</string>
 	<key>CFBundleExecutable</key><string>SwiftDropShare</string>
 	<key>CFBundleIdentifier</key><string>com.swiftdrop.app.share</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>SwiftDrop</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>

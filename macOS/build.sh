@@ -38,6 +38,7 @@ if [ ! -f "$OUT/AppIcon.icns" ] || [ Tools/make_icon.swift -nt "$OUT/AppIcon.icn
   iconutil -c icns "$OUT/tmp/AppIcon.iconset" -o "$OUT/AppIcon.icns"
 fi
 cp "$OUT/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+mkdir -p "$APPEX/Contents/Resources" && cp "$OUT/AppIcon.icns" "$APPEX/Contents/Resources/AppIcon.icns"
 
 echo "▸ Signing (ad-hoc)"
 codesign --force --sign - --entitlements Resources/Share.entitlements "$APPEX"
@@ -48,11 +49,14 @@ echo "✓ Built $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
   pkill -x SwiftDrop 2>/dev/null || true
+  # Drop registrations of any other copies (e.g. this build folder) so Finder uses the installed one.
+  pluginkit -r "$PWD/$APPEX" 2>/dev/null || true
   rm -rf /Applications/SwiftDrop.app
   cp -R "$APP" /Applications/
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/SwiftDrop.app
   pluginkit -a /Applications/SwiftDrop.app/Contents/PlugIns/SwiftDropShare.appex || true
   pluginkit -e use -i com.swiftdrop.app.share || true
+  killall Finder 2>/dev/null || true    # Finder caches the Share menu
   open /Applications/SwiftDrop.app
   echo "✓ Installed to /Applications and launched"
 fi
