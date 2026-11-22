@@ -34,6 +34,73 @@ public sealed class Bluetooth
         _engine = engine;
         engine.BluetoothChanged += () => _ = UpdateAdvertising();
         engine.WakeDevice = Knock;
+        engine.IsLinked = fp => _linked.ContainsKey(fp);
+        engine.WakeLinked = TapLink;
+    }
+
+    // iPhones holding a link to us: fingerprint -> Bluetooth device id; knocks they should read back.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _linked = new();
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> _knockFor = new();
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _knockWaiter = new();
+    GattLocalCharacteristic? _link;
+
+    async Task<bool> TapLink(string fingerprint, string json)
+    {
+        if (_link == null || !_linked.TryGetValue(fingerprint, out var deviceId)) return false;
+        var client = _link.SubscribedClients.FirstOrDefault(c => c.Session.DeviceId.Id == deviceId);
+        if (client == null) { _linked.TryRemove(fingerprint, out _); return false; }
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _knockFor[deviceId] = Encoding.UTF8.GetBytes(json);
+        _knockWaiter[deviceId] = tcs;
+        try
+        {
+            // The knock itself when it fits in one notification, else a 1-byte tap and the iPhone reads it back.
+            var body = Encoding.UTF8.GetBytes(json);
+            var w = new DataWriter(); w.WriteBytes(body.Length <= client.MaxNotificationSize ? body : Encoding.UTF8.GetBytes("k"));
+            await _link.NotifyValueAsync(w.DetachBuffer(), client);
+            var ok = await Task.WhenAny(tcs.Task, Task.Delay(15_000)) == tcs.Task && tcs.Task.Result;
+            if (!ok) { _linked.TryRemove(fingerprint, out _); _knockFor.TryRemove(deviceId, out _); }
+            else _ = Task.Delay(30_000).ContinueWith(t => _knockFor.TryRemove(deviceId, out byte[]? gone));
+            return ok;
+        }
+        catch { return false; }
+        finally { _knockWaiter.TryRemove(deviceId, out _); }
+    }
+
+    async void OnLinkWrite(GattLocalCharacteristic sender, GattWriteRequestedEventArgs args)
+    {
+        using var deferral = args.GetDeferral();
+        var request = await args.GetRequestAsync();
+        if (request == null) return;
+        var json = Encoding.UTF8.GetString(request.Value.ToArray());
+        if (request.Option == GattWriteOption.WriteWithResponse) request.Respond();
+        if (json == "ack")                       // the iPhone got our knock
+        {
+            if (_knockWaiter.TryGetValue(args.Session.DeviceId.Id, out var waiter)) waiter.TrySetResult(true);
+            return;
+        }
+        try
+        {
+            if (JsonSerializer.Deserialize<BleCard>(json) is not { } card) return;
+            var id = args.Session.DeviceId.Id;
+            foreach (var k in _linked.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList()) _linked.TryRemove(k, out _);
+            _linked[card.Fingerprint] = id;
+            await _engine.HandleCard(card);
+        }
+        catch { }
+    }
+
+    async void OnLinkRead(GattLocalCharacteristic sender, GattReadRequestedEventArgs args)
+    {
+        using var deferral = args.GetDeferral();
+        var request = await args.GetRequestAsync();
+        if (request == null) return;
+        var id = args.Session.DeviceId.Id;
+        if (!_knockFor.TryGetValue(id, out var bytes)) { request.RespondWithProtocolError(GattProtocolError.AttributeNotFound); return; }
+        var offset = (int)Math.Min(request.Offset, (uint)bytes.Length);
+        var w = new DataWriter(); w.WriteBytes(bytes.Skip(offset).ToArray());
+        request.RespondWithValue(w.DetachBuffer());
+        if (offset == 0 && _knockWaiter.TryGetValue(id, out var tcs)) tcs.TrySetResult(true);
     }
 
     /// Write a wake-up knock to a (paused) iPhone at a known address.
@@ -78,6 +145,23 @@ public sealed class Bluetooth
                         ReadProtectionLevel = GattProtectionLevel.Plain,
                     });
                     if (ch.Error == BluetoothError.Success) ch.Characteristic.ReadRequested += OnRead;
+                    var link = await _provider.Service.CreateCharacteristicAsync(BleCard.Link, new GattLocalCharacteristicParameters
+                    {
+                        CharacteristicProperties = GattCharacteristicProperties.Read | GattCharacteristicProperties.Write | GattCharacteristicProperties.Notify,
+                        ReadProtectionLevel = GattProtectionLevel.Plain,
+                        WriteProtectionLevel = GattProtectionLevel.Plain,
+                    });
+                    if (link.Error == BluetoothError.Success)
+                    {
+                        _link = link.Characteristic;
+                        _link.WriteRequested += OnLinkWrite;
+                        _link.ReadRequested += OnLinkRead;
+                        _link.SubscribedClientsChanged += (c, e) =>
+                        {
+                            var ids = c.SubscribedClients.Select(x => x.Session.DeviceId.Id).ToHashSet();
+                            foreach (var k in _linked.Where(kv => !ids.Contains(kv.Value)).Select(kv => kv.Key).ToList()) _linked.TryRemove(k, out _);
+                        };
+                    }
                     await UpdateAdvertising();
                 }
             }

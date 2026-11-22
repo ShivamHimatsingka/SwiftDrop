@@ -173,6 +173,9 @@ public sealed class Engine
 
     /// Platform hook: write a knock to the device at this Bluetooth address. Returns true if delivered.
     public Func<ulong, string, Task<bool>>? WakeDevice;
+    /// Platform hooks for held links: is that iPhone linked to us, and tap it (true once it read the knock).
+    public Func<string, bool>? IsLinked;
+    public Func<string, string, Task<bool>>? WakeLinked;
     readonly ConcurrentDictionary<string, (ulong address, DateTime seen)> _wakeable = new();
 
     /// A card read over Bluetooth: connect over the normal network if possible.
@@ -186,6 +189,10 @@ public sealed class Engine
             foreach (var scheme in new[] { card.Scheme, card.Scheme == "https" ? "http" : "https" })
                 if ((reveal ? await Register($"{scheme}://{ip}:{card.Port}", probe: true) : (await InfoWithCode($"{scheme}://{ip}:{card.Port}")).info) is { } info)
                 { Ingest(info, ip, card.Port, scheme); return; }
+        // Not on Wi‑Fi but holding a Bluetooth link to us: a locked iPhone in range — list it.
+        if (card.Caps.Contains("wake") && IsLinked?.Invoke(card.Fingerprint) == true && card.Ips.Count > 0
+            && _peers.TryAdd(card.Fingerprint, new Peer(card.Fingerprint, card.Alias, card.Model, card.Type, card.Ips[0], card.Port, card.Scheme)))
+            Changed?.Invoke();
     }
 
     /// Call while a sending UI is visible.
@@ -202,7 +209,8 @@ public sealed class Engine
                 if (info != null) { _misses.TryRemove(p.Id, out _); return; }
                 if (code == 403) { _peers.TryRemove(p.Id, out _); _wakeable.TryRemove(p.Id, out _); Changed?.Invoke(); return; }  // hidden now
                 // Two consecutive misses before a device disappears (slow Wi-Fi / sleeping phones).
-                var sleeping = _wakeable.TryGetValue(p.Id, out var wk) && DateTime.UtcNow - wk.seen < TimeSpan.FromMinutes(15);
+                var sleeping = (_wakeable.TryGetValue(p.Id, out var wk) && DateTime.UtcNow - wk.seen < TimeSpan.FromMinutes(15))
+                               || IsLinked?.Invoke(p.Id) == true;
                 if (_misses.AddOrUpdate(p.Id, 1, (_, n) => n + 1) >= 2 && !TransferOf(p.Id).phase.IsActive() && !sleeping)
                 { _peers.TryRemove(p.Id, out _); _misses.TryRemove(p.Id, out _); Changed?.Invoke(); }
             }));
@@ -536,19 +544,21 @@ public sealed class Engine
     {
         if (!_wakeable.TryGetValue(peer.Id, out var w) || WakeDevice == null) return;
         if (await Reachable(peer)) return;
-        if (DateTime.UtcNow - w.seen > TimeSpan.FromMinutes(15))
-            throw new TransferException(Phase.Failed, $"{peer.Alias} is asleep — open SwiftDrop on it and try again");
+        var locked = $"{peer.Alias} is locked — open SwiftDrop on it, then send again";
         var what = items.Count == 1 ? Path.GetFileName(items[0].Name) : $"{items.Count} items";
         var knock = JsonSerializer.Serialize(new Dictionary<string, string> { ["a"] = Settings.Name, ["f"] = Fingerprint, ["n"] = what });
-        if (!await WakeDevice(w.address, knock))
-            throw new TransferException(Phase.Failed, $"{peer.Alias} is asleep — open SwiftDrop on it and try again");
+        // Best: the iPhone holds a link to us (works however long it's been locked). Else a direct knock,
+        // which only reaches an iPhone seen in the last ~15 min.
+        var woke = (WakeLinked != null && await WakeLinked(peer.Id, knock))
+                   || (DateTime.UtcNow - w.seen <= TimeSpan.FromMinutes(15) && await WakeDevice(w.address, knock));
+        if (!woke) throw new TransferException(Phase.Failed, locked);
         var deadline = DateTime.UtcNow.AddMinutes(2);
         while (DateTime.UtcNow < deadline)
         {
             await Task.Delay(1500, ct);
             if (await Reachable(peer)) return;
         }
-        throw new TransferException(Phase.Failed, $"{peer.Alias} didn’t open SwiftDrop");
+        throw new TransferException(Phase.Failed, $"{peer.Alias} didn’t answer — open SwiftDrop on it, then send again");
     }
 
     async Task SendAsync(Peer peer, IReadOnlyList<OutItem> items, CancellationToken ct)

@@ -94,7 +94,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
             ble.card = { [weak self] in self?.bleCard() }
             ble.onCard = { [weak self] card in self?.handleBLE(card) }
             ble.onWake = { [weak self] w in self?.onWake?(w) }
-            ble.start(advertise: config.advertise)
+            ble.start(advertise: config.advertise, link: config.wakeable)
         }
         if p2p { p2pBrowser.onChange = { [weak self] found in self?.handleP2P(found) } }
 
@@ -223,6 +223,20 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
                     self.ingest(info, host: ip, port: card.p, scheme: scheme); return
                 }
             }
+            // Not answering on Wi‑Fi but linked over Bluetooth: a locked iPhone in range. List it as asleep.
+            guard card.x.contains("wake"), self.ble.isLinked(card.f), let ip = card.ip.first else { return }
+            var peer = Peer(id: card.f, transportID: self.id, alias: card.a, deviceModel: card.m, deviceType: card.t,
+                            host: ip, port: card.p, scheme: card.s, lastSeen: Date())
+            peer.asleep = true
+            let added: Bool = self.stateLock.withLock {
+                guard self.knownPeers[card.f] == nil else { return false }
+                self.knownPeers[card.f] = peer; return true
+            }
+            if added {
+                SDLog.log("device \(card.a) asleep (linked over Bluetooth)")
+                let listed = peer
+                await MainActor.run { self.host?.transportDidUpdate(listed) }
+            }
         }
     }
 
@@ -303,6 +317,7 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
     }
 
     private func noteMiss(_ peerID: String, hidden: Bool = false) {
+        let linked = ble.isLinked(peerID)          // outside the lock: it waits on the Bluetooth queue
         let drop: Bool = stateLock.withLock {
             if hidden { knownPeers[peerID] = nil; missCount[peerID] = nil; wakeable.remove(peerID); return true }
             missCount[peerID, default: 0] += 1
@@ -311,7 +326,8 @@ final class LocalSendTransport: NearbyTransport, @unchecked Sendable {
                 // Paused iPhone: still advertising over Bluetooth, so keep it listed (we can wake it).
                 // A locked iPhone is invisible on Bluetooth to Macs/PCs, so keep it listed as "Asleep"
                 // for up to 30 min after we last heard from it (Wi‑Fi or Bluetooth).
-                let lastHeard = max(bleSeen[peerID] ?? .distantPast, knownPeers[peerID]?.lastSeen ?? .distantPast)
+                var lastHeard = max(bleSeen[peerID] ?? .distantPast, knownPeers[peerID]?.lastSeen ?? .distantPast)
+                if linked { lastHeard = Date() }      // still holding a Bluetooth link: in range
                 if wakeable.contains(peerID), Date().timeIntervalSince(lastHeard) < 1800 {
                     if var p = knownPeers[peerID], !p.asleep {
                         p.asleep = true; knownPeers[peerID] = p

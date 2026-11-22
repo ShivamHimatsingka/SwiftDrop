@@ -40,6 +40,9 @@ class Ble(private val ctx: Context) {
         val CONNECT: UUID = UUID.fromString("7A4F0003-5D3F-4B6E-9C2A-53574946544F")
         /** Write-only knock that wakes a paused iPhone app ("Tap to receive"). */
         val WAKE: UUID = UUID.fromString("7A4F0004-5D3F-4B6E-9C2A-53574946544F")
+        /** Held connection: a nearby iPhone subscribes here and writes its card; we notify "k" to wake it. */
+        val LINK: UUID = UUID.fromString("7A4F0005-5D3F-4B6E-9C2A-53574946544F")
+        val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
 
     var card: (() -> BleCard?)? = null
@@ -53,6 +56,15 @@ class Ble(private val ctx: Context) {
     private val lastRead = ConcurrentHashMap<String, Long>()
     private val busy = ConcurrentHashMap.newKeySet<String>()
     private val connectReplies = ConcurrentHashMap<String, String>()  // BLE address -> reply
+    // iPhones holding a link to us: fingerprint -> device; knocks waiting to be read back.
+    private val linked = ConcurrentHashMap<String, BluetoothDevice>()
+    private val knockFor = ConcurrentHashMap<String, ByteArray>()           // BLE address -> knock JSON
+    private val knockWaiter = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Boolean>>()
+    private val longWrites = ConcurrentHashMap<String, java.io.ByteArrayOutputStream>()
+    private var linkChar: BluetoothGattCharacteristic? = null
+    private val mtu = ConcurrentHashMap<String, Int>()
+
+    fun isLinked(fingerprint: String) = linked.containsKey(fingerprint)
     private var advertising = false
     private var scanning = false
     @Volatile private var scanUntil = 0L
@@ -117,7 +129,34 @@ class Ble(private val ctx: Context) {
     private fun openServer() {
         if (server != null) return
         val s = manager?.openGattServer(ctx, object : BluetoothGattServerCallback() {
+            override fun onConnectionStateChange(d: BluetoothDevice, status: Int, state: Int) {
+                if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                    linked.entries.removeIf { it.value.address == d.address }
+                    knockWaiter.remove(d.address)?.complete(false)
+                }
+            }
+
+            override fun onMtuChanged(d: BluetoothDevice, m: Int) { mtu[d.address] = m }
+
+            override fun onDescriptorWriteRequest(d: BluetoothDevice, id: Int, desc: BluetoothGattDescriptor, prepared: Boolean,
+                                                  needsResponse: Boolean, offset: Int, value: ByteArray?) {
+                if (needsResponse) server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, 0, null)
+            }
+
+            override fun onExecuteWrite(d: BluetoothDevice, id: Int, execute: Boolean) {
+                val buf = longWrites.remove(d.address)
+                if (execute && buf != null) linkCard(d, buf.toByteArray())
+                server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, 0, null)
+            }
+
             override fun onCharacteristicReadRequest(d: BluetoothDevice, id: Int, offset: Int, ch: BluetoothGattCharacteristic) {
+                if (ch.uuid == LINK) {
+                    val k = knockFor[d.address]
+                    if (k == null || offset > k.size) { server?.sendResponse(d, id, BluetoothGatt.GATT_FAILURE, offset, null); return }
+                    server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, offset, k.copyOfRange(offset, k.size))
+                    if (offset == 0) knockWaiter.remove(d.address)?.complete(true)
+                    return
+                }
                 val body = when (ch.uuid) {
                     INFO -> card?.invoke()?.toJson()
                     CONNECT -> connectReplies[d.address] ?: """{"wait":true}"""
@@ -129,6 +168,11 @@ class Ble(private val ctx: Context) {
 
             override fun onCharacteristicWriteRequest(d: BluetoothDevice, id: Int, ch: BluetoothGattCharacteristic, prepared: Boolean,
                                                       needsResponse: Boolean, offset: Int, value: ByteArray?) {
+                if (ch.uuid == LINK && value != null) {
+                    if (String(value) == "ack") knockWaiter.remove(d.address)?.complete(true)   // the iPhone got our knock
+                    else if (prepared) longWrites.getOrPut(d.address) { java.io.ByteArrayOutputStream() }.write(value)
+                    else linkCard(d, value)
+                }
                 if (ch.uuid == CONNECT && value != null) {
                     val fp = String(value)
                     connectReplies.remove(d.address)
@@ -142,8 +186,44 @@ class Ble(private val ctx: Context) {
         svc.addCharacteristic(BluetoothGattCharacteristic(CONNECT,
             BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
             BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE))
+        val link = BluetoothGattCharacteristic(LINK,
+            BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE)
+        link.addDescriptor(BluetoothGattDescriptor(CCCD, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE))
+        svc.addCharacteristic(link)
+        linkChar = link
         s.addService(svc)
         server = s
+    }
+
+    private fun linkCard(d: BluetoothDevice, bytes: ByteArray) {
+        val c = BleCard.from(String(bytes)) ?: return
+        linked.entries.removeIf { it.value.address == d.address }
+        linked[c.fingerprint] = d
+        android.util.Log.i("SwiftDrop", "Bluetooth link from ${c.alias} (${linked.size} linked)")
+        onCard?.invoke(c, d.address)
+    }
+
+    /** Tap an iPhone that holds a link to us; true once it read the knock back. Blocks up to ~15 s. */
+    fun wakeLinked(fingerprint: String, knockJson: String): Boolean {
+        val d = linked[fingerprint] ?: return false
+        val ch = linkChar ?: return false
+        val f = java.util.concurrent.CompletableFuture<Boolean>()
+        knockFor[d.address] = knockJson.toByteArray()
+        knockWaiter[d.address] = f
+        // The knock itself when it fits in one notification, else a 1-byte tap and the iPhone reads it back.
+        val kj = knockJson.toByteArray()
+        val k = if (kj.size <= (mtu[d.address] ?: 23) - 3) kj else "k".toByteArray()
+        val sent = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) server?.notifyCharacteristicChanged(d, ch, false, k) == BluetoothGatt.GATT_SUCCESS
+            else @Suppress("DEPRECATION") { ch.value = k; server?.notifyCharacteristicChanged(d, ch, false) == true }
+        }.getOrDefault(false)
+        val ok = sent && runCatching { f.get(15, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
+        knockWaiter.remove(d.address)
+        if (!ok) { knockFor.remove(d.address); linked.remove(fingerprint) }
+        else handler.postDelayed({ knockFor.remove(d.address) }, 30_000)
+        android.util.Log.i("SwiftDrop", "Bluetooth link tap → ${if (ok) "delivered" else "no answer"}")
+        return ok
     }
 
     // ---------------------------------------------------------------- GATT client

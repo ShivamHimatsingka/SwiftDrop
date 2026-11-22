@@ -177,6 +177,12 @@ object Engine {
                 val hit = Client.probe(ip, card.port, me, isDiscoverable(null))
                 if (hit != null) { ingest(hit.first, ip, card.port, hit.second); return@execute }
             }
+            // Not on Wi‑Fi but holding a Bluetooth link to us: a locked iPhone in range — list it.
+            if ("wake" in card.caps && ble?.isLinked(card.fingerprint) == true && card.ips.isNotEmpty()) {
+                val p = Peer(card.fingerprint, card.alias, card.model, card.type, card.ips[0], card.port, card.scheme, bleAddress = address)
+                peers.update { l -> if (l.any { it.id == p.id }) l else (l + p).sortedWith(compareBy({ !isFavorite(it.id) }, { it.alias.lowercase() })) }
+                return@execute
+            }
             if ("wfd" in card.caps && wifiDirect?.supported == true) {
                 val p = Peer(card.fingerprint, card.alias, card.model, card.type, "", card.port, card.scheme,
                              bleAddress = address, wifiDirect = true)
@@ -207,7 +213,8 @@ object Engine {
                 }
                 // Drop only after two consecutive misses, so a slow handshake doesn't hide a nearby device.
                 else if ((misses.merge(p.id, 1, Int::plus) ?: 0) >= 2 &&
-                         (wakeable[p.id]?.second ?: 0) < System.currentTimeMillis() - 15 * 60_000) {
+                         (wakeable[p.id]?.second ?: 0) < System.currentTimeMillis() - 15 * 60_000 &&
+                         ble?.isLinked(p.id) != true) {
                     misses.remove(p.id)
                     peers.update { l -> if (transfers.value[p.id]?.first?.active == true) l else l.filterNot { it.id == p.id } }
                 }
@@ -422,20 +429,22 @@ object Engine {
     private fun wakeIfNeeded(peer: Peer, items: List<OutItem>) {
         val (address, seen) = wakeable[peer.id] ?: return
         if (reachable(peer)) return
-        if (System.currentTimeMillis() - seen > 15 * 60_000)
-            throw TransferException(Phase.FAILED, "${peer.alias} is asleep — open SwiftDrop on it and try again")
+        val locked = "${peer.alias} is locked — open SwiftDrop on it, then send again"
         val what = if (items.size == 1) items[0].name.substringAfterLast('/') else "${items.size} items"
         val knock = JSONObject().put("a", deviceName).put("f", fingerprint).put("n", what).toString()
         android.util.Log.i("SwiftDrop", "${peer.alias} isn't answering — knocking over Bluetooth")
-        if (ble?.wake(address, knock) != true)
-            throw TransferException(Phase.FAILED, "${peer.alias} is asleep — open SwiftDrop on it and try again")
+        // Best: the iPhone holds a link to us (works however long it's been locked). Else a direct knock,
+        // which only reaches an iPhone seen in the last ~15 min.
+        val woke = ble?.wakeLinked(peer.id, knock) == true ||
+                   (System.currentTimeMillis() - seen <= 15 * 60_000 && ble?.wake(address, knock) == true)
+        if (!woke) throw TransferException(Phase.FAILED, locked)
         val deadline = System.currentTimeMillis() + 120_000
         while (System.currentTimeMillis() < deadline) {
             if (Thread.currentThread().isInterrupted) throw InterruptedException()
             Thread.sleep(1500)
             if (reachable(peer)) return
         }
-        throw TransferException(Phase.FAILED, "${peer.alias} didn’t open SwiftDrop")
+        throw TransferException(Phase.FAILED, "${peer.alias} didn’t answer — open SwiftDrop on it, then send again")
     }
 
     private fun doSend(original: Peer, items: List<OutItem>) {

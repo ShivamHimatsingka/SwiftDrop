@@ -29,7 +29,7 @@ targets:
         UILaunchScreen: {}
         UIFileSharingEnabled: true
         SwiftDropKeychainGroup: $(AppIdentifierPrefix)$(SWIFTDROP_BUNDLE_PREFIX).swiftdrop
-        UIBackgroundModes: [bluetooth-peripheral]
+        UIBackgroundModes: [bluetooth-peripheral, bluetooth-central]
         LSSupportsOpeningDocumentsInPlace: true
         NSLocalNetworkUsageDescription: SwiftDrop finds nearby phones and computers on your Wi‑Fi to share files.
         NSBonjourServices: [_swiftdrop._tcp]
