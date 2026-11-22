@@ -571,7 +571,9 @@ public sealed class Engine
     /// address saved from its last card and only for iPhones seen recently.
     async Task WakeIfNeeded(Peer peer, IReadOnlyList<OutItem> items, CancellationToken ct)
     {
-        if (!_wakeable.TryGetValue(peer.Id, out var w) || WakeDevice == null) return;
+        // Linked iPhones come with no Bluetooth address (the card arrived over their held link).
+        var linked = IsLinked?.Invoke(peer.Id) == true;
+        if (!_wakeable.TryGetValue(peer.Id, out var w) && !linked) return;
         if (await Reachable(peer)) return;
         var locked = $"{peer.Alias} is locked — open SwiftDrop on it, then send again";
         var what = items.Count == 1 ? Path.GetFileName(items[0].Name) : $"{items.Count} items";
@@ -579,7 +581,7 @@ public sealed class Engine
         // Best: the iPhone holds a link to us (works however long it's been locked). Else a direct knock,
         // which only reaches an iPhone seen in the last ~15 min.
         var woke = (WakeLinked != null && await WakeLinked(peer.Id, knock))
-                   || (DateTime.UtcNow - w.seen <= TimeSpan.FromMinutes(15) && await WakeDevice(w.address, knock));
+                   || (w.address != 0 && WakeDevice != null && DateTime.UtcNow - w.seen <= TimeSpan.FromMinutes(15) && await WakeDevice(w.address, knock));
         if (!woke) throw new TransferException(Phase.Failed, locked);
         var deadline = DateTime.UtcNow.AddMinutes(2);
         while (DateTime.UtcNow < deadline)

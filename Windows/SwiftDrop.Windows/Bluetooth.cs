@@ -43,6 +43,7 @@ public sealed class Bluetooth
     readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> _knockFor = new();
     readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _knockWaiter = new();
     GattLocalCharacteristic? _link;
+    readonly System.Collections.Generic.Dictionary<string, byte[]> _parts = new();
 
     async Task<bool> TapLink(string fingerprint, string json)
     {
@@ -52,8 +53,8 @@ public sealed class Bluetooth
         {
             try
             {
-                using var dev = await BluetoothLEDevice.FromIdAsync(id);
-                if (dev != null && await Knock(dev.BluetoothAddress, json)) return true;
+                using var dev = await BluetoothLEDevice.FromIdAsync(id);   // keeps the right (random) address type
+                if (dev != null && await Knock(dev, json)) return true;
             }
             catch { }
         }
@@ -88,8 +89,18 @@ public sealed class Bluetooth
         using var deferral = args.GetDeferral();
         var request = await args.GetRequestAsync();
         if (request == null) return;
-        var json = Encoding.UTF8.GetString(request.Value.ToArray());
+        var id0 = args.Session.DeviceId.Id;
+        var part = request.Value.ToArray();
         if (request.Option == GattWriteOption.WriteWithResponse) request.Respond();
+        // Long writes arrive in parts (by offset): reassemble before reading the card.
+        byte[] whole;
+        lock (_parts)
+        {
+            if (request.Offset == 0 || !_parts.TryGetValue(id0, out var buf)) buf = Array.Empty<byte>();
+            whole = buf.Take((int)request.Offset).Concat(part).ToArray();
+            _parts[id0] = whole;
+        }
+        var json = Encoding.UTF8.GetString(whole);
         if (json == "ack")                       // the iPhone got our knock
         {
             if (_knockWaiter.TryGetValue(args.Session.DeviceId.Id, out var waiter)) waiter.TrySetResult(true);
@@ -97,7 +108,9 @@ public sealed class Bluetooth
         }
         try
         {
+            if (!json.TrimEnd().EndsWith("}")) return;               // more parts to come
             if (JsonSerializer.Deserialize<BleCard>(json) is not { } card) return;
+            lock (_parts) _parts.Remove(id0);
             var id = args.Session.DeviceId.Id;
             foreach (var k in _linked.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList()) _linked.TryRemove(k, out _);
             _linked[card.Fingerprint] = id;
@@ -125,7 +138,15 @@ public sealed class Bluetooth
         try
         {
             using var device = await Open(address);
-            if (device == null) return false;
+            return device != null && await Knock(device, json);
+        }
+        catch { return false; }
+    }
+
+    async Task<bool> Knock(BluetoothLEDevice device, string json)
+    {
+        try
+        {
             var services = await device.GetGattServicesForUuidAsync(BleCard.Service, BluetoothCacheMode.Uncached);
             var svc = services.Services.FirstOrDefault();
             if (svc == null) return false;

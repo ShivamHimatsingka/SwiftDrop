@@ -142,7 +142,8 @@ class Ble(private val ctx: Context) {
 
             override fun onDescriptorWriteRequest(d: BluetoothDevice, id: Int, desc: BluetoothGattDescriptor, prepared: Boolean,
                                                   needsResponse: Boolean, offset: Int, value: ByteArray?) {
-                if (needsResponse) server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, 0, null)
+                // Prepared (long) writes must echo the part back, or iOS aborts the write.
+                if (needsResponse) server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, offset, if (prepared) value else null)
             }
 
             override fun onExecuteWrite(d: BluetoothDevice, id: Int, execute: Boolean) {
