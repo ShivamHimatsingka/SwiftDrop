@@ -65,6 +65,8 @@ class Ble(private val ctx: Context) {
     private val mtu = ConcurrentHashMap<String, Int>()
 
     fun isLinked(fingerprint: String) = linked.containsKey(fingerprint)
+    /** Bluetooth address of a linked iPhone (its held connection keeps it reachable for a direct knock). */
+    fun linkedAddress(fingerprint: String): String? = linked[fingerprint]?.address
     private var advertising = false
     private var scanning = false
     @Volatile private var scanUntil = 0L
@@ -218,7 +220,7 @@ class Ble(private val ctx: Context) {
             if (Build.VERSION.SDK_INT >= 33) server?.notifyCharacteristicChanged(d, ch, false, k) == BluetoothGatt.GATT_SUCCESS
             else @Suppress("DEPRECATION") { ch.value = k; server?.notifyCharacteristicChanged(d, ch, false) == true }
         }.getOrDefault(false)
-        val ok = sent && runCatching { f.get(15, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
+        val ok = sent && runCatching { f.get(8, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
         knockWaiter.remove(d.address)
         if (!ok) { knockFor.remove(d.address); linked.remove(fingerprint) }
         else handler.postDelayed({ knockFor.remove(d.address) }, 30_000)

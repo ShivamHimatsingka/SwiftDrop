@@ -46,6 +46,22 @@ public sealed class Bluetooth
 
     async Task<bool> TapLink(string fingerprint, string json)
     {
+        if (await TapOverLink(fingerprint, json)) return true;
+        // No answer: knock directly over the iPhone's held connection (keeps it reachable while locked).
+        if (_linked.TryGetValue(fingerprint, out var id))
+        {
+            try
+            {
+                using var dev = await BluetoothLEDevice.FromIdAsync(id);
+                if (dev != null && await Knock(dev.BluetoothAddress, json)) return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    async Task<bool> TapOverLink(string fingerprint, string json)
+    {
         if (_link == null || !_linked.TryGetValue(fingerprint, out var deviceId)) return false;
         var client = _link.SubscribedClients.FirstOrDefault(c => c.Session.DeviceId.Id == deviceId);
         if (client == null) { _linked.TryRemove(fingerprint, out _); return false; }
@@ -58,7 +74,7 @@ public sealed class Bluetooth
             var body = Encoding.UTF8.GetBytes(json);
             var w = new DataWriter(); w.WriteBytes(body.Length <= client.MaxNotificationSize ? body : Encoding.UTF8.GetBytes("k"));
             await _link.NotifyValueAsync(w.DetachBuffer(), client);
-            var ok = await Task.WhenAny(tcs.Task, Task.Delay(15_000)) == tcs.Task && tcs.Task.Result;
+            var ok = await Task.WhenAny(tcs.Task, Task.Delay(8_000)) == tcs.Task && tcs.Task.Result;
             if (!ok) { _linked.TryRemove(fingerprint, out _); _knockFor.TryRemove(deviceId, out _); }
             else _ = Task.Delay(30_000).ContinueWith(t => _knockFor.TryRemove(deviceId, out byte[]? gone));
             return ok;

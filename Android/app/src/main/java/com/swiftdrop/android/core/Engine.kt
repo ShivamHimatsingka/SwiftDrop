@@ -435,8 +435,10 @@ object Engine {
         android.util.Log.i("SwiftDrop", "${peer.alias} isn't answering — knocking over Bluetooth")
         // Best: the iPhone holds a link to us (works however long it's been locked). Else a direct knock,
         // which only reaches an iPhone seen in the last ~15 min.
+        val linkedAt = ble?.linkedAddress(peer.id)
         val woke = ble?.wakeLinked(peer.id, knock) == true ||
-                   (System.currentTimeMillis() - seen <= 15 * 60_000 && ble?.wake(address, knock) == true)
+                   (linkedAt != null && ble?.wake(linkedAt, knock) == true) ||
+                   (System.currentTimeMillis() - seen <= 15 * 60_000 && address != linkedAt && ble?.wake(address, knock) == true)
         if (!woke) throw TransferException(Phase.FAILED, locked)
         val deadline = System.currentTimeMillis() + 120_000
         while (System.currentTimeMillis() < deadline) {

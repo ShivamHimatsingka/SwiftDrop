@@ -10,7 +10,7 @@ so it also works with every device that already runs LocalSend (Linux included).
 |---|---|---|---|---|
 | Tech | Swift + SwiftUI | Swift + SwiftUI | Kotlin + Compose | .NET 8 + WPF |
 | Send from the system share menu | Finder ▸ Share ▸ SwiftDrop | Share sheet ▸ SwiftDrop | Share ▸ SwiftDrop | Explorer ▸ right-click ▸ Send with SwiftDrop |
-| Receive with nothing open | ✅ menu bar app, starts at login | ⚠️ best effort: open SwiftDrop on the iPhone when it's been locked a while (see *Waking a locked iPhone*) | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
+| Receive with nothing open | ✅ menu bar app, starts at login | ✅ even when locked, via a Bluetooth link the iPhone keeps to nearby senders (see *Waking a locked iPhone*) | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
 | Accept prompt | Notification-style banner | AirDrop-style card | Heads-up notification + card | Toast above the tray |
 | Visibility | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone |
 | Size | 2.4 MB | 2.5 MB | 2 MB APK | 25 MB exe (incl. Windows Bluetooth bindings) |
@@ -94,29 +94,37 @@ While the menu-bar panel or Share sheet is open, the Mac re-checks devices every
 - **Dimmed, "Asleep"**: a locked iPhone (or one where SwiftDrop is in the background). It stays listed for up to 30 minutes. Clicking it tries to wake it; if that fails you'll see **"iPhone is locked — open SwiftDrop on it, then send again"**.
 - **Gone**: switched off, out of range, or not heard from for 30 minutes.
 
-### Waking a locked iPhone (best effort — please read)
-Apple lets only AirDrop receive while an iPhone is locked. SwiftDrop's workaround is a Bluetooth "knock": the sender
-taps the iPhone over Bluetooth and the iPhone shows **"“Mac” would like to share …"** on the Lock Screen
-(long-press it for **Accept** / **Decline**).
+### Waking a locked iPhone
+Apple lets only AirDrop receive while an iPhone is locked, so SwiftDrop uses Bluetooth to wake it:
 
-**Honest limit:** a few minutes after an iPhone is locked, iOS moves background Bluetooth into a mode that only other
-iPhones can see. Macs, PCs and Android phones then can't reach it, so the knock fails. In practice:
-- **Just locked / just switched apps:** the knock usually works from any device.
-- **Locked for a while:** it usually won't. Unlock the iPhone and open SwiftDrop (it comes up instantly), then send.
-  The sender says **"iPhone is locked — open SwiftDrop on it, then send again"** instead of failing silently.
-- Fully reliable lock-screen receiving needs Apple push notifications (a paid Apple Developer account and a server),
-  which SwiftDrop doesn't use.
-- **On the iPhone:** allow SwiftDrop's notifications (Settings ▸ Notifications ▸ SwiftDrop), including *Lock Screen*.
-- **Background time:** iOS gives a woken app about 30 seconds, enough for files up to roughly a gigabyte over the direct link.
-  For bigger transfers you'll get "Open SwiftDrop to finish receiving".
-- **Sending from the iPhone** works any time, from any app's Share button.
+1. While SwiftDrop is running on the iPhone (foreground or background, locked or not), it keeps a low-power
+   Bluetooth connection to each nearby SwiftDrop Mac, PC or Android phone. iOS allows this in the background and
+   reconnects automatically when a device comes back in range or restarts.
+2. That connection keeps the locked iPhone listed on the sender, shown dimmed as **Asleep**.
+3. When you send, the sender knocks over that connection. iOS wakes SwiftDrop, and the iPhone either receives
+   straight away (favourites set to auto-accept) or shows **"“Mac” would like to share …"** on the Lock Screen.
+   Long-press it for **Accept** / **Decline**.
+
+**Measured on a real iPhone:** after 8½ minutes locked, the file arrived 20 s after sending. After restarting the Mac
+with the iPhone locked, the iPhone reconnected by itself in 6–28 s, and a send finished in 4 s.
+
+**What it needs:**
+- Open SwiftDrop once after installing, updating or restarting the iPhone. After that, lock it or switch apps freely.
+- Don't swipe SwiftDrop away in the app switcher. iOS never wakes a force-quit app (only AirDrop is exempt).
+- Allow SwiftDrop's notifications (Settings ▸ Notifications ▸ SwiftDrop), including *Lock Screen*.
+- The sender must be visible (Receiving set to Favorites or Everyone) when the iPhone first connects to it.
+- Background time: iOS gives a woken app about 30 seconds, enough for files up to roughly a gigabyte over the direct
+  link. For bigger transfers you'll get "Open SwiftDrop to finish receiving".
+- If the iPhone still can't be reached (out of Bluetooth range, ~10 m), the sender says
+  **"iPhone is locked — open SwiftDrop on it, then send again"**.
+- Android and Windows use the same link; they're built but haven't been tested against a real locked iPhone yet.
 
 ## Platform notes (honest limits)
 
 - **A swiped-away (force-quit) iPhone app can't receive.** iOS won't wake it for anything; only Apple's AirDrop is exempt.
-- **iPhone receiving while locked or in the background** is best effort (see *Waking a locked iPhone*). iOS pauses
-  every app except AirDrop, and after a few minutes locked its Bluetooth is visible only to other iPhones.
-  When it matters, open SwiftDrop on the iPhone before sending to it.
+- **iPhone receiving while locked** works through the Bluetooth link (see *Waking a locked iPhone*). It needs
+  Bluetooth range (~10 m) and SwiftDrop not force-quit. Fully range-independent waking would need Apple push
+  notifications (a paid developer account and a server), which SwiftDrop doesn't use.
 - **"No app" on Android** is as close as Android allows: there's no screen to open, but Android
   requires a (minimised, silent) notification for any background service.
 - **Discovery** uses LocalSend's multicast announcements, Bluetooth LE, Bonjour, and a subnet scan as a last resort.
@@ -157,7 +165,8 @@ docs/           NativeReceiving.md — the plan for receiving with nothing insta
 transfers in both directions over the direct link and over normal Wi‑Fi, and Bluetooth wake-up of a locked iPhone
 (knock delivered in 2 s, notification posted on the Lock Screen, transfer finished 19 s after sending including the
 tap, over the direct link) shortly after locking; after the iPhone had been locked for several minutes a Bluetooth
-scan from the Mac found nothing, which is why lock-screen receiving is documented as best effort). Receiving Off verified on the Mac (403 to probes, no network advertisement). Every file was byte-identical, and
+scan from the Mac found nothing. That led to the Bluetooth link described above, then tested after 8½ minutes locked and
+across Mac restarts). Receiving Off verified on the Mac (403 to probes, no network advertisement). Every file was byte-identical, and
 interface byte counters confirmed which link carried each transfer. Android Wi‑Fi Direct and Windows Bluetooth are
 built but untested on hardware.
 

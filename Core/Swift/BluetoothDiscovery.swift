@@ -382,7 +382,7 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
                 let sent = p.updateValue(body, for: ch, onSubscribedCentrals: [target])
                 if !sent { self.notifyBacklog.append(target) }
                 SDLog.log("Bluetooth link: tapping \(fingerprint.prefix(8)) (subscribed: \(self.subscribed[central.identifier] != nil), queued: \(!sent))")
-                self.queue.asyncAfter(deadline: .now() + 15) { self.knockDone(central.identifier, false) }
+                self.queue.asyncAfter(deadline: .now() + 8) { self.knockDone(central.identifier, false) }
             }
         }
     }
@@ -405,10 +405,17 @@ final class BluetoothDiscovery: NSObject, CBPeripheralManagerDelegate, CBCentral
     /// Knock on a paused device over Bluetooth. Returns true when the write was acknowledged.
     func wake(_ fingerprint: String, _ knock: BLEWake) async -> Bool {
         guard let payload = try? JSONEncoder().encode(knock) else { return false }
-        if queue.sync(execute: { linkedCentrals[fingerprint] != nil }), await knockViaLink(fingerprint, payload) { return true }
-        return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+        // Direct knock first: while the iPhone holds its link to us it stays reachable this way, and it's
+        // fastest. The tap over the link is the backup.
+        if queue.sync(execute: { peripheralFor[fingerprint] != nil || linkedCentrals[fingerprint] != nil }), await directKnock(fingerprint, payload) { return true }
+        if queue.sync(execute: { linkedCentrals[fingerprint] != nil }) { return await knockViaLink(fingerprint, payload) }
+        return false
+    }
+
+    private func directKnock(_ fingerprint: String, _ payload: Data) async -> Bool {
+        await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             queue.async {
-                guard let id = self.peripheralFor[fingerprint], let central = self.central, central.state == .poweredOn,
+                guard let id = self.peripheralFor[fingerprint] ?? self.linkedCentrals[fingerprint]?.identifier, let central = self.central, central.state == .poweredOn,
                       let p = central.retrievePeripherals(withIdentifiers: [id]).first, self.pendingWake[id] == nil else {
                     c.resume(returning: false); return
                 }
