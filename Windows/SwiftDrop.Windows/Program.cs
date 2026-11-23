@@ -112,7 +112,25 @@ public sealed class App : Application
         _tray.ContextMenuStrip.Items.Add("Quit SwiftDrop", null, (_, _) => Quit());
         _tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) ToggleFlyout(); };
         if (!background) ShowFlyout();
+        // Lightweight while idle in the tray: once a minute, if no window is open, hand unused memory
+        // back to Windows (start-up code and libraries are paged back in only if needed again).
+        _trimTimer = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(60),
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle, (_, _) => TrimIfIdle(), Dispatcher);
+        _trimTimer.Start();
+        _ = new DispatcherTimerLite(Dispatcher, TimeSpan.FromSeconds(15), TrimIfIdle);
     }
+
+    System.Windows.Threading.DispatcherTimer? _trimTimer;
+
+    void TrimIfIdle()
+    {
+        if (Windows.OfType<Window>().Any(w => w.IsVisible)) return;
+        GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: true);
+        try { SetProcessWorkingSetSize(System.Diagnostics.Process.GetCurrentProcess().Handle, -1, -1); } catch { }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern bool SetProcessWorkingSetSize(IntPtr process, nint min, nint max);
 
     public void Quit() { _tray!.Visible = false; Engine.Stop(); Shutdown(); }
 

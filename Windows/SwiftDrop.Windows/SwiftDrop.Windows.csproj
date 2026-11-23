@@ -16,6 +16,11 @@
     <!-- Single self-contained exe; trimming is off because WPF does not support it. -->
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Lighter: no background GC thread, English resources only. Never compress the single file:
+         that unpacks the whole runtime into memory (measured 367 MB vs 94 MB). -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../SwiftDrop.Core/SwiftDrop.Core.csproj" />
