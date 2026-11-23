@@ -2,38 +2,67 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleDevelopmentRegion</key><string>en</string>
-	<key>CFBundleDisplayName</key><string>SwiftDrop</string>
-	<key>CFBundleExecutable</key><string>SwiftDrop</string>
-	<key>CFBundleIconFile</key><string>AppIcon</string>
-	<key>CFBundleIdentifier</key><string>com.swiftdrop.app</string>
-	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-	<key>CFBundleName</key><string>SwiftDrop</string>
-	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
-	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
-	<key>LSMinimumSystemVersion</key><string>14.0</string>
-	<key>LSUIElement</key><true/>
-	<key>NSHumanReadableCopyright</key><string>SwiftDrop</string>
-	<key>NSLocalNetworkUsageDescription</key><string>SwiftDrop finds and sends files to nearby devices running LocalSend on your network.</string>
-	<key>NSBluetoothAlwaysUsageDescription</key><string>SwiftDrop uses Bluetooth to find nearby devices, even on networks that hide them.</string>
-	<key>NSBonjourServices</key><array><string>_swiftdrop._tcp</string></array>
-	<key>NSDownloadsFolderUsageDescription</key><string>SwiftDrop saves received files to your Downloads folder.</string>
-	<key>NSDesktopFolderUsageDescription</key><string>SwiftDrop reads the files you choose to send.</string>
-	<key>NSDocumentsFolderUsageDescription</key><string>SwiftDrop reads the files you choose to send.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key><true/>
-		<key>NSAllowsArbitraryLoads</key><true/>
-	</dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>SwiftDrop</string>
+	<key>CFBundleExecutable</key>
+	<string>SwiftDrop</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.swiftdrop.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>SwiftDrop</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.7.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
-			<key>CFBundleURLName</key><string>com.swiftdrop.app</string>
-			<key>CFBundleURLSchemes</key><array><string>swiftdrop</string></array>
+			<key>CFBundleURLName</key>
+			<string>com.swiftdrop.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>swiftdrop</string>
+			</array>
 		</dict>
 	</array>
-	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>CFBundleVersion</key>
+	<string>7</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>SwiftDrop uses Bluetooth to find nearby devices, even on networks that hide them.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_swiftdrop._tcp</string>
+	</array>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>SwiftDrop reads the files you choose to send.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>SwiftDrop reads the files you choose to send.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>SwiftDrop saves received files to your Downloads folder.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>SwiftDrop</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>SwiftDrop finds and sends files to nearby devices running LocalSend on your network.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>

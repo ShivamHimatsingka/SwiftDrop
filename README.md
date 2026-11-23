@@ -13,7 +13,7 @@ so it also works with every device that already runs LocalSend (Linux included).
 | Receive with nothing open | ✅ menu bar app, starts at login | ✅ even when locked, via a Bluetooth link the iPhone keeps to nearby senders (see *Waking a locked iPhone*) | ✅ background service + Quick Settings tile | ✅ tray app, starts at login |
 | Accept prompt | Notification-style banner | AirDrop-style card | Heads-up notification + card | Toast above the tray |
 | Visibility | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone | Off / Favorites / Everyone |
-| Size | 2.4 MB | 2.5 MB | 2 MB APK | 25 MB exe (incl. Windows Bluetooth bindings) |
+| Size | 2.4 MB | 2.5 MB | 2 MB APK | 25 MB exe; ~8 MB memory idle in the tray |
 
 Everything streams straight to disk, so files of any size and any format work. Folders keep their structure.
 Transfers are encrypted (HTTPS with per-device self-signed certificates, like LocalSend).

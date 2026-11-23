@@ -2,19 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleDevelopmentRegion</key><string>en</string>
-	<key>CFBundleDisplayName</key><string>SwiftDrop</string>
-	<key>CFBundleExecutable</key><string>SwiftDropShare</string>
-	<key>CFBundleIdentifier</key><string>com.swiftdrop.app.share</string>
-	<key>CFBundleIconFile</key><string>AppIcon</string>
-	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-	<key>CFBundleName</key><string>SwiftDrop</string>
-	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
-	<key>LSMinimumSystemVersion</key><string>14.0</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>SwiftDrop</string>
+	<key>CFBundleExecutable</key>
+	<string>SwiftDropShare</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.swiftdrop.app.share</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>SwiftDrop</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.7.0</string>
+	<key>CFBundleVersion</key>
+	<string>7</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
 	<key>NSAppTransportSecurity</key>
-	<dict><key>NSAllowsLocalNetworking</key><true/></dict>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
@@ -22,8 +36,10 @@
 			<key>NSExtensionActivationRule</key>
 			<string>SUBQUERY (extensionItems, $extensionItem, SUBQUERY ($extensionItem.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.item" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.content" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url").@count &gt;= 1).@count &gt;= 1</string>
 		</dict>
-		<key>NSExtensionPointIdentifier</key><string>com.apple.share-services</string>
-		<key>NSExtensionPrincipalClass</key><string>ShareViewController</string>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.share-services</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>ShareViewController</string>
 	</dict>
 </dict>
 </plist>
