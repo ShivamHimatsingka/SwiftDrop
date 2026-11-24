@@ -12,7 +12,7 @@
     <RootNamespace>SwiftDrop.Windows</RootNamespace>
     <ApplicationIcon>SwiftDrop.ico</ApplicationIcon>
     <StartupObject>SwiftDrop.Windows.Program</StartupObject>
-    <Version>1.7.0</Version>
+    <Version>1.7.1</Version>
     <!-- Single self-contained exe; trimming is off because WPF does not support it. -->
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

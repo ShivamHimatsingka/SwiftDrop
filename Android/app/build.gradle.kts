@@ -11,8 +11,8 @@ android {
         applicationId = "com.swiftdrop.android"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.7.0"
+        versionCode = 8
+        versionName = "1.7.1"
     }
     buildTypes {
         release {
