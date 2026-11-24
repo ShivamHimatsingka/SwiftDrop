@@ -16,9 +16,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         self.model = model
         super.init()
 
-        let host = NSHostingController(rootView: MenuView(model: model, controller: self))
-        host.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = host
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
@@ -55,6 +52,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         model.sendingUIDidAppear()
         model.popoverVisible = true
         NSApp.activate(ignoringOtherApps: true)
+        // Build the panel only while it's open: its radar animation repeats forever and would keep
+        // redrawing ~30×/s in the hidden popover (measured 4–8% CPU idle).
+        if popover.contentViewController == nil {
+            let host = NSHostingController(rootView: MenuView(model: model, controller: self))
+            host.sizingOptions = [.preferredContentSize]
+            popover.contentViewController = host
+        }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
         button.highlight(true)
@@ -65,6 +69,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         model.popoverVisible = false
         statusItem.button?.highlight(false)
+        popover.contentViewController = nil      // stop all animations and timers in the closed panel
     }
 
     private func receiveDrop(_ payload: OutgoingPayload) {
